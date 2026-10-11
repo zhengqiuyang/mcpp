@@ -1,48 +1,92 @@
-# cpp-agent-lab
+# mcpp — the C++ SDK for the Model Context Protocol
 
-C++ × AI Agent 基础设施项目群。核心判断:**推理层已被 llama.cpp 饱和,"agent 工具链 + 检索基础设施"是 C++ 的系统性空白,而 MCP 官方 SDK 覆盖十种语言唯独没有 C++**——本仓库群就是填这个缺口的。
+[![CI](https://github.com/zhengqiuyang/mcpp/actions/workflows/ci.yml/badge.svg)](https://github.com/zhengqiuyang/mcpp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-v0.1.0-green.svg)](https://github.com/zhengqiuyang/mcpp/releases)
 
+MCP has official SDKs for TypeScript, Python, Java, Kotlin, C#, Ruby, Swift,
+PHP, Go and Rust — **but not C++**. Game engines, robot stacks, industrial
+software, trading systems and embedded devices are C++, and today the only
+way to give them an MCP surface is bolting on a Python sidecar.
+
+**`mcpp` fills that gap natively**: a zero-dependency, header-only C++17 SDK
+that lets any C++ application expose tools/resources/prompts to AI agents
+(Claude Desktop/Code, Cursor, Cline, …) or act as an MCP client.
+
+```cpp
+#include "mcpp/server.hpp"
+
+int main() {
+    mcpp::McpServer server("com.example.demo", "1.0.0");
+    server.add_tool("add", "Add two integers",
+                    {{"a", "integer", "left"}, {"b", "integer", "right"}},
+                    [](const mcpp::Json& args) {
+                        return mcpp::ToolResult::text(
+                            std::to_string(args.get("a").as_int() + args.get("b").as_int()));
+                    });
+    mcpp::StdioTransport transport;   // newline-delimited JSON on stdin/stdout
+    server.run(transport);
+}
 ```
-cpp-agent-lab/
-├── mcpp/            ⭐ 主项目:C++17 零依赖 MCP SDK(header-only,可编译可测试)
-├── code-intel-mcp/  第二梯队:代码库索引/检索 MCP server(构建在 mcpp 之上)
-├── docs/
-│   ├── ROADMAP.md            10 周路线图 + 止损信号
-│   └── designs/              副项目设计文档(v1 骨架,按窗口期启动)
-└── .github/workflows/ci.yml  gcc/clang/msvc × linux/macos/windows
-```
 
-## 项目组合逻辑
+Point Claude Desktop or the MCP Inspector at the binary — the tool is live.
 
-| 项目 | 角色 | 状态 |
-|---|---|---|
-| **mcpp** | 地基:官方缺位的 C++ MCP SDK | v0.1 代码完成(JSON/协议/stdio transport/server/client/测试/示例/CI) |
-| **code-intel-mcp** | 第一个杀手级应用:给 Claude Code/Cline 用的高速代码索引 | v0.1 骨架完成(词法扫描版),tree-sitter 升级路径已规划 |
-| meeting-notes | 商业备选:离线会议纪要全 C++ pipeline | 设计文档 |
-| mcp-ros2-bridge | 具身智能窗口期:MCP ↔ ROS2 | 设计文档 |
-| edge-agent-runtime | 单二进制 agent runtime("agent 版 llama.cpp") | 设计文档 |
+## Why it's credible
 
-**自举闭环**:mcp-test(TS,已有)测 mcpp;cronagent(已有)调度 code-intel-mcp;agent-pr-gate(已有)守 CI——现有 TS 工具链直接服务新的 C++ 底座。
+- **9.2× faster** full round-trips than the official TypeScript SDK in an
+  apples-to-apples benchmark (228k vs 24.8k ops/s, single thread) — see
+  [`benchmarks/ts-sdk/`](benchmarks/ts-sdk/)
+- **Validated by the official MCP Inspector CLI** (initialize / tools/list /
+  tools/call) and by **[mcp-test](https://github.com/zhengqiuyang/mcp-test)**,
+  the author's MCP security tool: 6/6 functional tests, 16/16 injection
+  probes, **0 leaks** — wired in as a CI job
+- **Zero dependencies, zero runtime**: four headers, C++17, no threads
+  required, embeds into any event loop via the `Transport` interface
 
-## 快速开始
+## Quick start
 
 ```bash
-# mcpp:构建 + 测试
+git clone https://github.com/zhengqiuyang/mcpp && cd mcpp
 cmake -S mcpp -B mcpp/build && cmake --build mcpp/build -j
-ctest --test-dir mcpp/build --output-on-failure
+ctest --test-dir mcpp/build --output-on-failure     # 5/5 green
 
-# 用 MCP Inspector 试 echo server
-npx @modelcontextprotocol/inspector ./mcpp/build/echo_server
-
-# code-intel-mcp
-cmake -S code-intel-mcp -B code-intel-mcp/build && cmake --build code-intel-mcp/build -j
+# drive it with the official inspector
+npx @modelcontextprotocol/inspector mcpp/build/echo_server
 ```
 
-## 详细背景
+Or without CMake — it's just headers:
 
-调研报告(生态地图、落地场景评估、为什么是这个方向):见
-`../cpp-ai-agent-research.md`(工作区内)。战略结论:押注 C++ Agent 基础设施,
-下行有保底(求职硬通货 + 自用地基),上行成为生态事实标准;止损信号是
-官方发布 C++ SDK 或引擎厂商开源标配实现。
+```bash
+g++ -std=c++17 -I mcpp/include mcpp/examples/echo_server.cpp -o echo_server
+```
 
-License:MIT(各子项目内)。
+Full API, compliance table and benchmarks: **[`mcpp/README.md`](mcpp/README.md)**
+
+## What's in this repo
+
+| Path | What |
+|---|---|
+| [`mcpp/`](mcpp/) | The SDK: JSON / protocol / stdio+process+HTTP transports / server / client, tests, examples, CI |
+| [`code-intel-mcp/`](code-intel-mcp/) | First app built on mcpp: fast codebase indexing for Claude Code / Cline (5ms to index mcpp itself) |
+| [`docs/`](docs/) | Roadmap (10-week plan + stop-loss signals) and sub-project designs (ROS2 bridge, edge agent runtime, offline meeting notes) |
+| [`benchmarks/`](benchmarks/) | Cross-SDK comparison harnesses |
+
+中文版项目背景与整体规划:[`docs/program-zh.md`](docs/program-zh.md)
+
+## Status & roadmap
+
+v0.1 ships the stable MCP core: initialize handshake with version
+negotiation, tools/resources/prompts, stdio + process + Streamable HTTP
+(POST-only) transports on both server and client sides, JSON-RPC error
+envelopes, and a published compliance table. Next: SSE GET stream,
+`Mcp-Session-Id`, tree-sitter code-intel, vcpkg/conan recipes —
+see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+Community libraries exist (cpp-mcp, TinyMCP, mcp-cpp, IBM TSAR-MCP) — all
+early, none a de facto standard. mcpp differs by shipping a dependency-free
+embeddable core with a synchronous, game-loop-friendly design. We'd rather
+converge than compete.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
