@@ -13,9 +13,9 @@
 
 servers:
   echo:
-    command: echo_server
+    command: ./echo_server
   fs:
-    command: filesystem_server
+    command: ./filesystem_server
     env:
       MCPP_FS_ROOT: ../tests/fixture
 

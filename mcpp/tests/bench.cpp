@@ -38,7 +38,7 @@ static McpServer g_server("bench.server", "1.0");
 
 int main() {
     const int kParseIters = 200000;
-    bench("Json::parse (MCP tools/call, ~150B)", kParseIters, [] {
+    bench("Json::parse (MCP tools/call, ~150B)", kParseIters, [&] {
         for (int i = 0; i < kParseIters; ++i) g_json_sink = Json::parse(kCallJson);
     });
 
@@ -82,7 +82,7 @@ int main() {
     client.initialize("bench", "1.0");
 
     const int kRoundIters = 50000;
-    bench("full round-trip (wire <-> dispatch)", kRoundIters, [] {
+    bench("full round-trip (wire <-> dispatch)", kRoundIters, [&] {
         for (int i = 0; i < kRoundIters; ++i)
             g_tool_sink = client.call_tool("add", Json{{"a", 19}, {"b", 23}});
     });
