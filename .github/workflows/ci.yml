@@ -35,3 +35,27 @@ jobs:
         run: cmake --build mcpp/build --config Release -j
       - name: Test
         run: ctest --test-dir mcpp/build -C Release --output-on-failure
+
+  # Self-bootstrap gate: the author's own mcp-test (functional + security
+  # probes) against mcpp's example servers.
+  mcp-test-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build mcpp examples
+        run: |
+          cmake -S mcpp -B mcpp/build
+          cmake --build mcpp/build -j
+      - name: Fetch and build mcp-test
+        run: |
+          git clone --depth 1 https://github.com/zhengqiuyang/mcp-test.git /tmp/mcp-test
+          cd /tmp/mcp-test && npm ci && npm run build
+      - name: Run mcp-test gate
+        run: |
+          mkdir -p mcpp/tests/fixture
+          echo "hello from the sandbox fixture" > mcpp/tests/fixture/hello.txt
+          cd mcpp/build
+          node /tmp/mcp-test/dist/src/cli.js -c ../tests/mcp-test.yaml

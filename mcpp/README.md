@@ -51,6 +51,7 @@ Design principles:
 | `include/mcpp/transport.hpp` | `Transport` interface + stdio + in-memory pair |
 | `include/mcpp/process_transport.hpp` | Spawn any MCP server binary, talk over its stdio |
 | `include/mcpp/http_transport.hpp` | Streamable HTTP server transport (POST-only, stateless) |
+| `include/mcpp/http_client_transport.hpp` | Streamable HTTP client (one connection per message) |
 | `include/mcpp/server.hpp` | `McpServer`: registration API + dispatch loop |
 | `include/mcpp/client.hpp` | `McpClient`: initialize / list_tools / call_tool |
 | `examples/` | echo, sandboxed filesystem, sysinfo, http echo servers + `mini_client` |
@@ -97,6 +98,7 @@ auto r = client.call_tool("add", mcpp::Json{{"a", 19}, {"b", 23}});
 | stdio transport (newline-delimited JSON) | ✅ |
 | Process transport (spawn a server binary) | ✅ Win (CreateProcess) + POSIX (fork/exec) |
 | Streamable HTTP transport (server side) | ✅ POST-only, stateless, keep-alive; SSE GET stream: roadmap |
+| Streamable HTTP transport (client side) | ✅ one connection per message, http:// only |
 | Server-not-initialized gating (-32002) | ✅ |
 | Validated against official MCP Inspector CLI | ✅ initialize / tools/list / tools/call |
 | notifications/* progress, cancellation propagation | 🚧 (cancel is acknowledged, sync handlers can't abort) |
@@ -105,15 +107,28 @@ auto r = client.call_tool("add", mcpp::Json{{"a", 19}, {"b", 23}});
 
 ## Performance
 
-`tests/bench.cpp`, single thread, MinGW GCC 16.2 `-O2`, Windows x64
-(128-byte MCP `tools/call` message):
+Apples-to-apples against the **official TypeScript SDK**
+(`@modelcontextprotocol/sdk` 1.32.1, node 24) — same workload (add tool,
+~130B message), in-memory transport, sequential round-trips, same machine:
 
-| Operation | Throughput |
-|---|---|
-| `Json::parse` | ~1.36M ops/s |
-| `Json::dump` | ~3.08M ops/s |
-| `McpServer::handle_message` (dispatch) | ~1.18M ops/s |
-| **Full wire round-trip** (serialize→transport→dispatch→serialize→parse) | **~228k ops/s (~4.4 µs/call)** |
+| Full round-trip (wire ↔ dispatch) | ops/s | vs TS SDK |
+|---|---|---|
+| **mcpp** (C++17, MinGW GCC 16.2 `-O2`) | **~228,000** | **9.2×** |
+| TypeScript SDK 1.32.1 | ~24,800 | 1× |
+
+Notably the raw JSON layers are comparable (V8's native `JSON` is fast);
+the gap is the protocol framework overhead (zod validation, promise
+pipeline). Micro-benchmarks (`tests/bench.cpp`, `benchmarks/ts-sdk/`):
+`Json::parse` ~1.36M/s, `Json::dump` ~3.08M/s, dispatch ~1.18M/s.
+
+## Self-bootstrap: tested by the author's own MCP security tool
+
+[`mcp-test`](https://github.com/zhengqiuyang/mcp-test) (functional +
+prompt-injection security probes, by the same author) runs against mcpp's
+example servers as a CI gate: **6/6 functional, 16/16 security probes,
+0 leaks** — the sandboxed filesystem server survives instruction override,
+SSH-key exfil, env dump, SSRF and tool-confusion probes.
+See `tests/mcp-test.yaml`.
 
 ## Roadmap
 

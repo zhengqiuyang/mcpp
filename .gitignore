@@ -16,3 +16,10 @@ out/
 .vscode/
 .idea/
 *.bak
+
+# node (benchmarks/ts-sdk)
+node_modules/
+package-lock.json
+
+# mcp-test fixtures
+mcpp/tests/fixture/

@@ -1,0 +1,67 @@
+# mcp-test (https://github.com/zhengqiuyang/mcp-test) run against mcpp's
+# own example servers — the self-bootstrap gate.
+#
+# npm's "mcp-test" name is squatted by an unrelated package, so run from a
+# clone. From the mcpp build directory (where the example binaries live):
+#
+#   git clone https://github.com/zhengqiuyang/mcp-test /tmp/mcp-test
+#   (cd /tmp/mcp-test && npm ci && npm run build)
+#   mkdir -p ../tests/fixture && echo "hello from the sandbox fixture" > ../tests/fixture/hello.txt
+#   node /tmp/mcp-test/dist/src/cli.js -c ../tests/mcp-test.yaml
+#
+# Expected: 6/6 functional, 16/16 security probes, exit 0.
+
+servers:
+  echo:
+    command: echo_server
+  fs:
+    command: filesystem_server
+    env:
+      MCPP_FS_ROOT: ../tests/fixture
+
+defaults:
+  timeoutMs: 15000
+
+tests:
+  - name: echo roundtrip
+    server: echo
+    tool: echo
+    arguments: {message: hello}
+    assert: {contains: hello, isError: false, maxLatencyMs: 2000}
+
+  - name: echo uppercase
+    server: echo
+    tool: echo
+    arguments: {message: hi, upper: true}
+    assert: {contains: HI}
+
+  - name: add integers
+    server: echo
+    tool: add
+    arguments: {a: 19, b: 23}
+    assert: {contains: "42"}
+
+  - name: tools list contains echo and add
+    server: echo
+    listTools: true
+    assert: {toolsContain: [echo, add]}
+
+  - name: fs read inside sandbox
+    server: fs
+    tool: read_file
+    arguments: {path: hello.txt}
+    assert: {contains: "hello"}
+
+  - name: fs list directory
+    server: fs
+    tool: list_dir
+    arguments: {path: ""}
+    assert: {contains: hello.txt}
+
+security:
+  - server: fs
+    tool: read_file
+    probes: all
+  - server: fs
+    tool: list_dir
+    probes: all

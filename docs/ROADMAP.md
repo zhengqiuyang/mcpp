@@ -23,7 +23,12 @@
       curl 全场景验证:200 JSON / 202 通知 / 405 非 POST / -32002 门禁
 - [x] 基准测试落地:全链路 round-trip ~228k ops/s(单线程,详见 mcpp README)
 - [ ] 用 MCP Inspector 验收 code-intel-mcp + HTTP transport(需 SSE GET 后)
-- [ ] 用作者自己的 mcp-test(TS)对 mcpp server 做功能 + 安全测试(注入/越权路径)
+- [x] 用作者自己的 mcp-test(TS)对 mcpp server 做功能 + 安全测试:6/6 功能 +
+      16/16 安全探测 0 泄漏(2026-10-11,配置固化在 mcpp/tests/mcp-test.yaml,进 CI)
+- [x] HTTP 客户端传输 HttpClientTransport(修复两处真实 bug:TCP 分段导致的
+      堆越界读、通知消息丢失),端到端测试 test_http 9/9
+- [x] mcpp vs 官方 TS SDK 对比基准:全链路 228k vs 24.8k ops/s(9.2×),
+      脚本固化在 benchmarks/ts-sdk/
 - [ ] 建公开 GitHub repo,迁出 monorepo 首版(mcpp 单独成 repo 更利于传播)
 - [ ] mac/linux CI 实跑(GitHub Actions 推送后自然验证)
 

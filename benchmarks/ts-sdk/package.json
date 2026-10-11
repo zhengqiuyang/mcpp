@@ -1,0 +1,10 @@
+{
+  "name": "ts-sdk-bench",
+  "private": true,
+  "type": "module",
+  "description": "Apples-to-apples benchmark: official TypeScript MCP SDK vs mcpp (C++), in-memory transport, same add-tool workload",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  }
+}
