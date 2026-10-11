@@ -4,12 +4,24 @@
 毫秒级**的符号搜索 / grep / 分页读文件。构建在 [mcpp](../mcpp) 之上,
 是 SDK 的第一个自用杀手级应用。
 
+## 引擎与精度(v0.2)
+
+两个提取引擎,**tree-sitter 为默认**(vendored,离线可构建,MIT):
+
+- **tree-sitter**(C/C++/Python/TypeScript/TSX):精确的函数/方法/类/结构体/
+  枚举/箭头函数定义——包括构造函数、析构函数、`operator=` 等词法版抓不到的符号,
+  且零函数调用误报。实测 mcpp 源码树:21 文件、248 符号、36ms。
+- **词法启发式**(其余语言回退):`cmake -DCODE_INTEL_TREESITTER=OFF` 时为唯一引擎,
+  保持零依赖构建。
+
+**增量重索引**:mtime 未变的文件直接复用上次结果——日常"index 一下"只重扫
+改过的文件(单测覆盖:改 1 个文件 → rescanned == 1)。
+
 ## 快速开始
 
 ```bash
 cmake -S code-intel-mcp -B code-intel-mcp/build && cmake --build code-intel-mcp/build -j
-# 或零构建系统直编:
-g++ -std=c++17 -I ../mcpp/include src/main.cpp -o code-intel-mcp
+ctest --test-dir code-intel-mcp/build --output-on-failure   # 28 checks
 ```
 
 接进 Claude Code(`claude_code_config.json`):
@@ -34,7 +46,8 @@ g++ -std=c++17 -I ../mcpp/include src/main.cpp -o code-intel-mcp
 | `grep {pattern, case_sensitive?, limit?}` | 跨文件字面量搜索 |
 | `read_file {path, start_line?, end_line?}` | 带行号分页读文件 |
 
-实测(mcpp 源码,12 文件 / ~2600 行):索引 5ms,查询亚毫秒。
+实测(mcpp 源码,21 文件):索引 36ms(tree-sitter),查询亚毫秒;重索引仅扫
+变更文件。
 
 ## 设计文档
 

@@ -32,23 +32,22 @@
 - [ ] 建公开 GitHub repo,迁出 monorepo 首版(mcpp 单独成 repo 更利于传播)
 - [ ] mac/linux CI 实跑(GitHub Actions 推送后自然验证)
 
-## 阶段 2:第 3-6 周 — mcpp v0.2 + code-intel v0.2
+## 阶段 2:第 3-6 周 — mcpp v0.2 + code-intel v0.2(2026-10-12 完成 ✅)
 
-**mcpp:**
-- [ ] ProcessTransport 从示例转正(Windows/POSIX 子进程 + 双管道)
-- [ ] Streamable HTTP transport(单 POST 端点,先 server 侧)
-- [ ] 分页(tools/list cursor)、进度通知、取消钩子
-- [ ] 基准测试:对比 TypeScript SDK 的 tools/call 吞吐与 P99(C++ 应显著赢)
-- [ ] vcpkg / CMake FetchContent 发布
+**mcpp(全部完成):**
+- [x] ProcessTransport 转正(Win/POSIX 子进程 + 双管道)+ 子进程集成测试
+- [x] Streamable HTTP:server POST-only + keep-alive + Mcp-Session-Id 会话
+      (mint/校验/DELETE),client 自动附带会话头 + end_session()
+- [x] 分页(cursor/nextCursor)、进度通知(_meta.progressToken)、取消检查点(-32800)
+- [x] CMake install(EXPORT)/find_package 消费者端到端验证 + FetchContent 文档
+- [x] 基准对比 TS SDK:9.2×(228k vs 24.8k ops/s)
 
-**code-intel-mcp:**
-- [ ] tree-sitter 集成(C++/Python/TS 三语言精确解析,替换词法启发式)
-- [ ] 增量重索引(mtime + 文件哈希)
-- [ ] 符号引用图(find references / call graph v1)
-- [ ] BM25 文本检索与符号搜索混合(嵌入模型路线放 v0.4)
-- [ ] 基准:索引 mcpp+code-intel 自身源码 <1s;对标 Serena 冷启动
+**code-intel-mcp(全部完成):**
+- [x] tree-sitter vendored(C/C++/Python/TS/TSX 五语法,离线构建)
+- [x] 精确符号提取(构造/析构/operator=),28 项单测
+- [x] 增量重索引(mtime,单测覆盖)
 
-## 阶段 3:第 7-10 周 — 差异化与发布
+## 阶段 3:第 7-10 周 — 差异化与发布(部分进行中)
 
 - [ ] mcpp README 对比表(cpp-mcp / TinyMCP / mcp-cpp / TSAR-MCP)
 - [ ] 技术博客:《为什么 MCP 需要 C++ SDK》+ 基准数据

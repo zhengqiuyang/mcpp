@@ -72,7 +72,21 @@ g++ -std=c++17 -I mcpp/include examples/echo_server.cpp -o echo_server
 ```
 
 Drop `include/` into any project (`#include "mcpp/server.hpp"`), or vendor
-the four headers — there is nothing else to install.
+the headers — there is nothing else to install.
+
+### Consuming as a package
+
+```cmake
+# installed:
+find_package(mcpp 0.2 REQUIRED)
+target_link_libraries(my_app PRIVATE mcpp::mcpp)
+
+# or straight from git, no install step:
+include(FetchContent)
+FetchContent_Declare(mcpp GIT_REPOSITORY https://github.com/zhengqiuyang/mcpp
+                          GIT_TAG v0.2.0)
+FetchContent_MakeAvailable(mcpp)
+```
 
 ## Client side
 
@@ -97,11 +111,13 @@ auto r = client.call_tool("add", mcpp::Json{{"a", 19}, {"b", 23}});
 | `ping` | ✅ |
 | stdio transport (newline-delimited JSON) | ✅ |
 | Process transport (spawn a server binary) | ✅ Win (CreateProcess) + POSIX (fork/exec) |
-| Streamable HTTP transport (server side) | ✅ POST-only, stateless, keep-alive; SSE GET stream: roadmap |
-| Streamable HTTP transport (client side) | ✅ one connection per message, http:// only |
+| Streamable HTTP transport (server side) | ✅ POST-only, keep-alive; optional `Mcp-Session-Id` sessions (minted at initialize, required after, DELETE terminates); SSE GET stream: roadmap |
+| Streamable HTTP transport (client side) | ✅ one connection per message, auto session header, `end_session()` |
+| List pagination (`cursor`/`nextCursor`) | ✅ tools / resources / prompts |
+| `notifications/progress` (bound to `_meta.progressToken`) | ✅ via `ToolContext::report_progress` |
+| Request cancellation | ✅ cooperative checkpoints (`ToolContext::cancel_checkpoint` → -32800) |
 | Server-not-initialized gating (-32002) | ✅ |
 | Validated against official MCP Inspector CLI | ✅ initialize / tools/list / tools/call |
-| notifications/* progress, cancellation propagation | 🚧 (cancel is acknowledged, sync handlers can't abort) |
 | sampling / roots / elicitation (client-side agent features) | 🚧 roadmap |
 | OAuth for remote transports | 📋 backlog |
 
@@ -135,10 +151,10 @@ See `tests/mcp-test.yaml`.
 1. **v0.1** — stdio core, ProcessTransport, full tests, examples, CI matrix
    (gcc/clang/msvc × linux/macos/windows); validated against the official
    MCP Inspector CLI.
-2. **v0.2** — Streamable HTTP hardening (SSE GET stream, `Mcp-Session-Id`,
-   Origin checks, thread-per-connection), HTTP client transport, compliance
-   suite runs in CI; benchmark suite vs. the TypeScript SDK.
-3. **v0.3** — completion API (notifications/progress, cancellation hooks),
+2. **v0.2 (current)** — Streamable HTTP sessions (`Mcp-Session-Id` + DELETE),
+   list pagination, progress notifications + cancellation checkpoints,
+   CMake `install(EXPORT)` / `find_package(mcpp)` support.
+3. **v0.3** — SSE GET stream, thread-per-connection HTTP, HTTP client TLS,
    vcpkg + conan recipes.
 
 ## Relation to existing C++ MCP libraries
