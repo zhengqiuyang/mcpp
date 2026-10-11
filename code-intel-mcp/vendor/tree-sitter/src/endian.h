@@ -37,7 +37,7 @@
 
 /* LOCAL PATCH (mcpp vendor): when the compiler's -I path contains this very
    directory, "<endian.h>" resolves back to this file and the include guard
-   swallows the system header, leaving le*/be*toh undefined (Linux link
+   swallows the system header, leaving le/be conversion macros undefined (Linux link
    errors). Define them from compiler-predefined byte order when missing. */
 #if !defined(le16toh)
 #  if (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || \
