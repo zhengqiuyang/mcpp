@@ -16,10 +16,9 @@ set(CI_SOURCES src/main.cpp)
 if(CODE_INTEL_TREESITTER)
     set(V ${CMAKE_CURRENT_SOURCE_DIR}/vendor)
 
-    add_library(ts_runtime STATIC ${V}/tree-sitter/src/lib.c)
+    add_library(ts_runtime STATIC ${CMAKE_CURRENT_SOURCE_DIR}/src/ts_lib_shim.c)
     target_include_directories(ts_runtime PUBLIC ${V}/tree-sitter/include ${V}/tree-sitter/src)
     target_compile_definitions(ts_runtime PUBLIC MCPP_CODE_INTEL_TREESITTER)
-    target_compile_definitions(ts_runtime PRIVATE _DEFAULT_SOURCE)
 
     add_library(ts_c STATIC ${V}/tree-sitter-c/parser.c)
     target_include_directories(ts_c PRIVATE ${V}/tree-sitter-c)
