@@ -35,6 +35,30 @@
 
 # include <endian.h>
 
+/* LOCAL PATCH (mcpp vendor): when the compiler's -I path contains this very
+   directory, "<endian.h>" resolves back to this file and the include guard
+   swallows the system header, leaving le*/be*toh undefined (Linux link
+   errors). Define them from compiler-predefined byte order when missing. */
+#if !defined(le16toh)
+#  if (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || \
+      defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64) || \
+      defined(__aarch64__) || defined(_M_ARM64)
+#    define le16toh(x) (x)
+#    define be16toh(x) __builtin_bswap16(x)
+#    define le32toh(x) (x)
+#    define be32toh(x) __builtin_bswap32(x)
+#    define le64toh(x) (x)
+#    define be64toh(x) __builtin_bswap64(x)
+#  else
+#    define le16toh(x) __builtin_bswap16(x)
+#    define be16toh(x) (x)
+#    define le32toh(x) __builtin_bswap32(x)
+#    define be32toh(x) (x)
+#    define le64toh(x) __builtin_bswap64(x)
+#    define be64toh(x) (x)
+#  endif
+#endif
+
 #elif defined(HAVE_SYS_ENDIAN_H) || \
     defined(__FreeBSD__) || \
     defined(__DragonFly__)
