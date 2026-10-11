@@ -49,10 +49,12 @@ Design principles:
 | `include/mcpp/json.hpp` | Self-contained JSON value/parser/serializer |
 | `include/mcpp/protocol.hpp` | Wire types, content blocks, JSON-RPC message helpers |
 | `include/mcpp/transport.hpp` | `Transport` interface + stdio + in-memory pair |
+| `include/mcpp/process_transport.hpp` | Spawn any MCP server binary, talk over its stdio |
+| `include/mcpp/http_transport.hpp` | Streamable HTTP server transport (POST-only, stateless) |
 | `include/mcpp/server.hpp` | `McpServer`: registration API + dispatch loop |
 | `include/mcpp/client.hpp` | `McpClient`: initialize / list_tools / call_tool |
-| `examples/` | echo, sandboxed filesystem, sysinfo servers + `mini_client` (spawns any MCP server binary and talks to it) |
-| `tests/` | JSON unit tests + full client↔server protocol tests |
+| `examples/` | echo, sandboxed filesystem, sysinfo, http echo servers + `mini_client` |
+| `tests/` | JSON/protocol/process tests + `bench` micro-benchmarks |
 
 ## Build
 
@@ -93,20 +95,36 @@ auto r = client.call_tool("add", mcpp::Json{{"a", 19}, {"b", 23}});
 | Prompts (`prompts/list`, `prompts/get`, arguments) | ✅ |
 | `ping` | ✅ |
 | stdio transport (newline-delimited JSON) | ✅ |
+| Process transport (spawn a server binary) | ✅ Win (CreateProcess) + POSIX (fork/exec) |
+| Streamable HTTP transport (server side) | ✅ POST-only, stateless, keep-alive; SSE GET stream: roadmap |
 | Server-not-initialized gating (-32002) | ✅ |
-| Streamable HTTP transport | 🚧 roadmap |
-| `notifications/*` progress, cancellation propagation | 🚧 (cancel is acknowledged, sync handlers can't abort) |
+| Validated against official MCP Inspector CLI | ✅ initialize / tools/list / tools/call |
+| notifications/* progress, cancellation propagation | 🚧 (cancel is acknowledged, sync handlers can't abort) |
 | sampling / roots / elicitation (client-side agent features) | 🚧 roadmap |
 | OAuth for remote transports | 📋 backlog |
 
+## Performance
+
+`tests/bench.cpp`, single thread, MinGW GCC 16.2 `-O2`, Windows x64
+(128-byte MCP `tools/call` message):
+
+| Operation | Throughput |
+|---|---|
+| `Json::parse` | ~1.36M ops/s |
+| `Json::dump` | ~3.08M ops/s |
+| `McpServer::handle_message` (dispatch) | ~1.18M ops/s |
+| **Full wire round-trip** (serialize→transport→dispatch→serialize→parse) | **~228k ops/s (~4.4 µs/call)** |
+
 ## Roadmap
 
-1. **v0.1** — this release: stdio core, full tests, examples, CI matrix
-   (gcc/clang/msvc × linux/macos/windows).
-2. **v0.2** — `ProcessTransport` graduated into the library; Streamable HTTP
-   transport; compliance runs against the official MCP Inspector in CI.
+1. **v0.1** — stdio core, ProcessTransport, full tests, examples, CI matrix
+   (gcc/clang/msvc × linux/macos/windows); validated against the official
+   MCP Inspector CLI.
+2. **v0.2** — Streamable HTTP hardening (SSE GET stream, `Mcp-Session-Id`,
+   Origin checks, thread-per-connection), HTTP client transport, compliance
+   suite runs in CI; benchmark suite vs. the TypeScript SDK.
 3. **v0.3** — completion API (notifications/progress, cancellation hooks),
-   benchmark suite vs. the TypeScript SDK, vcpkg + conan recipes.
+   vcpkg + conan recipes.
 
 ## Relation to existing C++ MCP libraries
 

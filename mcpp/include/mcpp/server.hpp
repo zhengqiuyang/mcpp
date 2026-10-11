@@ -85,12 +85,14 @@ public:
 
     // ------------------------------------------------------------- run loop
 
-    // Serve requests on the transport until EOF.
+    // Serve requests on the transport until EOF. Notifications produce no
+    // reply; the transport decides what that means (silence on stdio, a 202
+    // on HTTP).
     void run(Transport& transport) {
         std::string line;
         while (transport.read_message(line)) {
             auto reply = handle_line(line);
-            if (reply) transport.write_message(*reply);
+            transport.write_message(reply ? *reply : std::string());
         }
     }
 

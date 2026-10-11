@@ -19,7 +19,9 @@ public:
     virtual ~Transport() = default;
     // Read one framed message. Returns false on EOF / closed transport.
     virtual bool read_message(std::string& out) = 0;
-    // Write one framed message.
+    // Write one framed message. An empty string means "no reply for this
+    // message" (e.g. a JSON-RPC notification): stdio stays silent, HTTP
+    // answers 202 Accepted.
     virtual void write_message(const std::string& msg) = 0;
 };
 
@@ -46,6 +48,7 @@ public:
     }
 
     void write_message(const std::string& msg) override {
+        if (msg.empty()) return;  // notification: stay silent on stdio
         std::fwrite(msg.data(), 1, msg.size(), stdout);
         std::fputc('\n', stdout);
         std::fflush(stdout);
@@ -60,6 +63,7 @@ private:
 class InMemoryTransport : public Transport {
 public:
     void write_message(const std::string& msg) override {
+        if (msg.empty()) return;
         if (peer_) peer_->inbox_.push_back(msg);
     }
     bool read_message(std::string& out) override {

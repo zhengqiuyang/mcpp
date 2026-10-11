@@ -11,13 +11,21 @@
 - [x] code-intel-mcp v0.1:词法扫描索引 + 符号搜索 + grep + 分页读文件
 - [x] CI 矩阵:linux(gcc/clang)/ macos / windows(msvc)
 
-## 阶段 1:第 1-2 周 — 协议打穿与验收
+## 阶段 1:第 1-2 周 — 协议打穿与验收(部分完成 ✅)
 
-- [ ] 本地三平台实际编译 + ctest 全绿(Windows 已有 MinGW;补 mac/linux CI 跑通)
-- [ ] 用 MCP Inspector 实连 echo_server / code-intel-mcp,记录不兼容点并修复
-- [ ] mini_client 实连官方 `@modelcontextprotocol/server-everything`(参考服务器)
+- [x] Windows 本地 MinGW GCC 16.2 + CMake 4.4 全量构建,ctest 4/4 全绿
+      (2026-10-11)
+- [x] ProcessTransport 从示例转正进库(Win CreateProcess / POSIX fork-exec),
+      含子进程集成测试
+- [x] 官方 MCP Inspector CLI 实连验收:initialize / tools/list / tools/call
+      全部通过(echo_server)
+- [x] Streamable HTTP transport 首版(server 侧 POST-only、无状态、keep-alive);
+      curl 全场景验证:200 JSON / 202 通知 / 405 非 POST / -32002 门禁
+- [x] 基准测试落地:全链路 round-trip ~228k ops/s(单线程,详见 mcpp README)
+- [ ] 用 MCP Inspector 验收 code-intel-mcp + HTTP transport(需 SSE GET 后)
 - [ ] 用作者自己的 mcp-test(TS)对 mcpp server 做功能 + 安全测试(注入/越权路径)
 - [ ] 建公开 GitHub repo,迁出 monorepo 首版(mcpp 单独成 repo 更利于传播)
+- [ ] mac/linux CI 实跑(GitHub Actions 推送后自然验证)
 
 ## 阶段 2:第 3-6 周 — mcpp v0.2 + code-intel v0.2
 
