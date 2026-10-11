@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 project(code-intel-mcp VERSION 0.2.0 LANGUAGES C CXX)
 
+# tree-sitter runtime + generated parsers need C11 (MSVC defaults to C89
+# otherwise) and glibc's endian functions (_DEFAULT_SOURCE for le16toh).
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
 # mcpp is vendored from the sibling directory (add_subdirectory keeps the
 # monorepo self-contained; swap for find_package(mcpp) once published).
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../mcpp ${CMAKE_CURRENT_BINARY_DIR}/mcpp)
@@ -14,6 +19,7 @@ if(CODE_INTEL_TREESITTER)
     add_library(ts_runtime STATIC ${V}/tree-sitter/src/lib.c)
     target_include_directories(ts_runtime PUBLIC ${V}/tree-sitter/include ${V}/tree-sitter/src)
     target_compile_definitions(ts_runtime PUBLIC MCPP_CODE_INTEL_TREESITTER)
+    target_compile_definitions(ts_runtime PRIVATE _DEFAULT_SOURCE)
 
     add_library(ts_c STATIC ${V}/tree-sitter-c/parser.c)
     target_include_directories(ts_c PRIVATE ${V}/tree-sitter-c)
