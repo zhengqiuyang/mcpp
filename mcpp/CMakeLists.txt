@@ -1,9 +1,13 @@
 cmake_minimum_required(VERSION 3.15)
-project(mcpp VERSION 0.1.0 LANGUAGES CXX)
+project(mcpp VERSION 0.2.0 LANGUAGES CXX)
+
+include(GNUInstallDirs)
 
 add_library(mcpp INTERFACE)
 add_library(mcpp::mcpp ALIAS mcpp)
-target_include_directories(mcpp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(mcpp INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_compile_features(mcpp INTERFACE cxx_std_17)
 if(WIN32)
     # http_transport.hpp needs WinSock2 (system library, always present)
@@ -74,7 +78,6 @@ if(MCPP_BUILD_TESTS)
 endif()
 
 # ---- install / find_package(mcpp) support ---------------------------------
-include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 install(TARGETS mcpp EXPORT mcppTargets)
