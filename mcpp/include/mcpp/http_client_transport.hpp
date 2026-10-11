@@ -76,6 +76,27 @@ public:
     HttpClientTransport(const HttpClientTransport&) = delete;
     HttpClientTransport& operator=(const HttpClientTransport&) = delete;
 
+    // Session assigned by the server (Sessions mode); empty in stateless mode.
+    const std::string& session_id() const { return session_id_; }
+    // Raw response head of the last read (diagnostics/tests).
+    const std::string& last_response_headers() const { return last_headers_; }
+
+    // Terminate a session (DELETE). No-op when no session is held.
+    void end_session() {
+        if (session_id_.empty()) return;
+        sent_ = false;
+        send_request("DELETE");
+        std::string head;
+        char chunk[2048];
+        while (head.find("\r\n\r\n") == std::string::npos) {
+            int n = static_cast<int>(::recv(sock_, chunk, sizeof chunk, 0));
+            if (n <= 0) break;
+            head.append(chunk, static_cast<size_t>(n));
+        }
+        close_socket_if_open();
+        session_id_.clear();
+    }
+
     // Fires the POST immediately. Requests are answered by read_message;
     // notifications (no response expected) simply leave the 202 unread on a
     // closed connection — the socket is recycled on the next message.
@@ -99,6 +120,17 @@ public:
             head.append(chunk, static_cast<size_t>(n));
         }
         size_t body_at = head.find("\r\n\r\n") + 4;
+        last_headers_ = head.substr(0, body_at);
+
+        // Capture an assigned session id (Mcp-Session-Id response header).
+        size_t sid = to_lower_copy(head).find("\r\nmcp-session-id:");
+        if (sid != std::string::npos) {
+            size_t v = head.find_first_not_of(" \t", sid + 17);
+            size_t e = head.find("\r\n", v);
+            if (v != std::string::npos)
+                session_id_ = head.substr(v, e == std::string::npos ? std::string::npos
+                                                                    : e - v);
+        }
 
         // status line: HTTP/1.1 200 OK
         int status = std::atoi(head.c_str() + head.find(' ') + 1);
@@ -155,6 +187,15 @@ private:
 
     bool send_pending() {
         if (sent_) return true;
+        send_request("POST");
+        send_all(pending_.data(), pending_.size());
+        sent_ = true;
+        return true;
+    }
+
+    // Opens a fresh connection and writes the request head. POST bodies are
+    // sent by the caller; DELETE carries none.
+    void send_request(const char* method) {
         close_socket_if_open();
 
         addrinfo hints{};
@@ -173,19 +214,21 @@ private:
         }
         ::freeaddrinfo(res);
 
-        char header[512];
+        char header[640];
         int n = std::snprintf(header, sizeof header,
-                              "POST %s HTTP/1.1\r\n"
+                              "%s %s HTTP/1.1\r\n"
                               "Host: %s\r\n"
                               "Content-Type: application/json\r\n"
                               "Accept: application/json\r\n"
                               "Connection: close\r\n"
+                              "%s"
                               "Content-Length: %zu\r\n\r\n",
-                              path_.c_str(), host_port_.c_str(), pending_.size());
+                              method, path_.c_str(), host_port_.c_str(),
+                              session_id_.empty()
+                                  ? ""
+                                  : ("Mcp-Session-Id: " + session_id_ + "\r\n").c_str(),
+                              method[0] == 'D' ? 0 : pending_.size());
         send_all(header, static_cast<size_t>(n));
-        send_all(pending_.data(), pending_.size());
-        sent_ = true;
-        return true;
     }
 
     bool send_all(const char* data, size_t n) {
@@ -199,14 +242,20 @@ private:
     }
 
     static size_t content_length_of(const std::string& head) {
-        std::string lower = head;
-        for (char& c : lower) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+        std::string lower = to_lower_copy(head);
         size_t pos = lower.find("content-length:");
         if (pos == std::string::npos) return 0;
         return static_cast<size_t>(std::strtoull(head.c_str() + pos + 15, nullptr, 10));
     }
 
+    static std::string to_lower_copy(std::string s) {
+        for (char& c : s) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+        return s;
+    }
+
     std::string url_, host_, host_port_, path_ = "/", pending_;
+    std::string session_id_;
+    std::string last_headers_;
     uint16_t port_ = 80;
     SOCKET_T sock_ = kInvalid;
     bool sent_ = false;

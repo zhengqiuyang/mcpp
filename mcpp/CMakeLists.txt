@@ -38,7 +38,7 @@ if(MCPP_BUILD_TESTS)
     enable_testing()
     find_package(Threads REQUIRED)
 
-    set(MCPP_TEST_TARGETS test_json test_protocol test_process test_http)
+    set(MCPP_TEST_TARGETS test_json test_protocol test_process test_http test_features)
     foreach(t IN ITEMS ${MCPP_TEST_TARGETS})
         add_executable(${t} tests/${t}.cpp)
         target_link_libraries(${t} PRIVATE mcpp Threads::Threads)
@@ -73,4 +73,23 @@ if(MCPP_BUILD_TESTS)
     endif()
 endif()
 
-install(DIRECTORY include/ DESTINATION include)
+# ---- install / find_package(mcpp) support ---------------------------------
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+install(TARGETS mcpp EXPORT mcppTargets)
+install(EXPORT mcppTargets
+        FILE mcppTargets.cmake
+        NAMESPACE mcpp::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/mcpp)
+configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/mcppConfig.cmake.in
+                              ${CMAKE_CURRENT_BINARY_DIR}/mcppConfig.cmake
+                              INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/mcpp)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/mcppConfigVersion.cmake
+    VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/mcppConfig.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/mcppConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/mcpp)
+
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

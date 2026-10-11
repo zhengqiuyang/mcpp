@@ -17,8 +17,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -37,13 +39,22 @@
 #include <unistd.h>
 #endif
 
+#include "json.hpp"
 #include "transport.hpp"
 
 namespace mcpp {
 
 class HttpTransport : public Transport {
 public:
-    explicit HttpTransport(uint16_t port = 0, const std::string& bind_addr = "127.0.0.1") {
+    enum class Mode {
+        Stateless,  // v0.1 behaviour: no session tracking
+        Sessions,   // issue Mcp-Session-Id at initialize, require it after,
+                    // honor DELETE to terminate
+    };
+
+    explicit HttpTransport(uint16_t port = 0, const std::string& bind_addr = "127.0.0.1",
+                           Mode mode = Mode::Stateless)
+        : mode_(mode) {
 #ifdef _WIN32
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) die("WSAStartup failed");
@@ -103,6 +114,18 @@ public:
             }
             std::string method = head.substr(0, sp1);
 
+            // DELETE ends a session (Sessions mode only).
+            if (method == "DELETE" && mode_ == Mode::Sessions) {
+                std::string sid = find_header(head, "mcp-session-id");
+                if (!sid.empty() && sessions_.erase(sid) > 0) {
+                    send_simple_status("200 OK", false);
+                } else {
+                    send_simple_status("404 Not Found", false);
+                }
+                close_client();
+                continue;
+            }
+
             if (method != "POST") {
                 // Always drop the connection on non-POST: the request may
                 // carry a body we did not consume, which would desync a
@@ -122,6 +145,30 @@ public:
                 close_client();
                 continue;
             }
+
+            // Session bookkeeping: initialize mints a session id; every other
+            // request must present a known one.
+            if (mode_ == Mode::Sessions) {
+                bool is_initialize = false;
+                try {
+                    Json body = Json::parse(out);
+                    is_initialize = body.is_object() &&
+                                    body.get_or<std::string>("method", "") == "initialize";
+                } catch (const Json::Error&) {
+                }
+                if (is_initialize) {
+                    cur_session_ = make_session_id();
+                    sessions_.insert(cur_session_);
+                } else {
+                    std::string sid = find_header(head, "mcp-session-id");
+                    if (sid.empty() || sessions_.count(sid) == 0) {
+                        send_simple_status("400 Bad Request", false);
+                        close_client();
+                        continue;
+                    }
+                    cur_session_ = sid;
+                }
+            }
             return true;
         }
     }
@@ -129,16 +176,20 @@ public:
     // Reply to the last request: JSON body -> 200, empty -> 202 (notification).
     void write_message(const std::string& msg) override {
         if (client_ == kInvalid) return;
+        std::string session_header;
+        if (mode_ == Mode::Sessions && !cur_session_.empty())
+            session_header = "Mcp-Session-Id: " + cur_session_ + "\r\n";
         if (msg.empty()) {
             send_simple_status("202 Accepted", false);
         } else {
-            char header[256];
+            char header[320];
             int n = std::snprintf(header, sizeof header,
                                   "HTTP/1.1 200 OK\r\n"
                                   "Content-Type: application/json\r\n"
                                   "Content-Length: %zu\r\n"
-                                  "%s\r\n",
-                                  msg.size(), keep_alive_ ? "" : "Connection: close\r\n");
+                                  "%s%s\r\n",
+                                  msg.size(), session_header.c_str(),
+                                  keep_alive_ ? "" : "Connection: close\r\n");
             send_all(header, static_cast<size_t>(n));
             send_all(msg.data(), msg.size());
         }
@@ -258,6 +309,30 @@ private:
         return s;
     }
 
+    static std::string make_session_id() {
+        static unsigned counter = 0;
+        auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+        char buf[48];
+        std::snprintf(buf, sizeof buf, "mcp-%x-%llx",
+                      ++counter, static_cast<unsigned long long>(ticks));
+        return buf;
+    }
+
+    // Case-insensitive header lookup; returns the trimmed value or "".
+    static std::string find_header(const std::string& head, const std::string& name) {
+        std::string lower_head = to_lower(head);
+        std::string needle = "\r\n" + to_lower(name) + ":";
+        size_t pos = lower_head.find(needle);
+        if (pos == std::string::npos) {
+            if (lower_head.rfind(to_lower(name) + ":", 0) == 0) pos = 0;  // folded start? (rare)
+            else return "";
+        }
+        size_t v = head.find_first_not_of(" \t", pos + needle.size());
+        if (v == std::string::npos) return "";
+        size_t e = head.find("\r\n", v);
+        return head.substr(v, e == std::string::npos ? std::string::npos : e - v);
+    }
+
     static size_t parse_content_length(const std::string& head) {
         size_t pos = 0;
         while ((pos = head.find("\r\n", pos)) != std::string::npos) {
@@ -294,6 +369,9 @@ private:
     std::string pending_;  // read-ahead bytes for the current client
     bool keep_alive_ = true;
     uint16_t port_ = 0;
+    Mode mode_ = Mode::Stateless;
+    std::unordered_set<std::string> sessions_;
+    std::string cur_session_;
 };
 
 }  // namespace mcpp

@@ -18,22 +18,63 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "json.hpp"
 #include "protocol.hpp"
 #include "transport.hpp"
+#include "version.hpp"
 
 namespace mcpp {
 
 struct ServerOptions {
     std::string instructions;  // optional instructions surfaced at initialize
+    // Page size for tools/resources/prompts list responses. Spec clients page
+    // via cursor; servers that always return everything may leave this large.
+    size_t page_size = 1000;
+};
+
+// Per-request context handed to two-argument tool handlers: progress
+// reporting (only visible when the request carried a _meta.progressToken and
+// the server runs over a transport) and cooperative cancellation checkpoints.
+// With the synchronous run() loop, cancellation is checked between messages,
+// so checkpoints mainly serve threaded integrations.
+class ToolContext {
+public:
+    // Fire a notifications/progress message bound to the caller's
+    // progressToken; no-op when the token is absent (spec: optional).
+    void report_progress(int64_t progress, std::optional<int64_t> total = std::nullopt,
+                         const std::string& message = "") {
+        if (!has_token_ || !sink_) return;
+        Json p = Json::object();
+        p["progressToken"] = progress_token_;
+        p["progress"] = progress;
+        if (total) p["total"] = *total;
+        if (!message.empty()) p["message"] = message;
+        sink_->write_message(msg::notification("notifications/progress", std::move(p)).dump());
+    }
+
+    // Throw REQUEST_CANCELLED if the client cancelled this request.
+    void cancel_checkpoint() {
+        if (cancelled_) throw RpcError(mcp_error::REQUEST_CANCELLED, "request cancelled");
+    }
+
+    bool cancelled() const { return cancelled_; }
+
+private:
+    friend class McpServer;
+    Json progress_token_;
+    bool has_token_ = false;
+    Transport* sink_ = nullptr;
+    bool cancelled_ = false;
 };
 
 class McpServer {
 public:
     using ToolHandler = std::function<ToolResult(const Json&)>;
+    using ToolContextHandler = std::function<ToolResult(const Json&, ToolContext&)>;
     using ResourceHandler = std::function<std::string()>;  // returns the text body
     using PromptHandler = std::function<PromptResult(const Json& args)>;
 
@@ -60,6 +101,17 @@ public:
         t.description = std::move(description);
         t.input_schema = std::move(input_schema);
         t.handler = std::move(handler);
+        tools_.push_back(std::move(t));
+    }
+
+    // Context-aware variant: handlers receive progress/cancellation plumbing.
+    void add_tool(std::string tool_name, std::string description,
+                  std::vector<ToolParam> params, ToolContextHandler handler) {
+        Tool t;
+        t.name = std::move(tool_name);
+        t.description = std::move(description);
+        t.input_schema = build_input_schema(params);
+        t.ctx_handler = std::move(handler);
         tools_.push_back(std::move(t));
     }
 
@@ -91,28 +143,30 @@ public:
     void run(Transport& transport) {
         std::string line;
         while (transport.read_message(line)) {
-            auto reply = handle_line(line);
+            auto reply = handle_line(line, &transport);
             transport.write_message(reply ? *reply : std::string());
         }
     }
 
     // Handle one raw (serialized) message; returns the serialized reply, or
     // nullopt when there is nothing to send (notifications, parse-and-ignore).
-    std::optional<std::string> handle_line(std::string_view line) {
+    // `sink` (optional) enables server-initiated notifications (progress).
+    std::optional<std::string> handle_line(std::string_view line, Transport* sink = nullptr) {
         Json message;
         try {
             message = Json::parse(line);
         } catch (const Json::Error& e) {
             return msg::error(Json(nullptr), rpc::PARSE_ERROR, e.what()).dump();
         }
-        auto reply = handle_message(message);
+        auto reply = handle_message(message, sink);
         if (!reply) return std::nullopt;
         return reply->dump();
     }
 
     // Handle one parsed message. Never throws for input problems — malformed
     // requests produce error responses. Handler exceptions are caught.
-    std::optional<Json> handle_message(const Json& message) {
+    std::optional<Json> handle_message(const Json& message, Transport* sink = nullptr) {
+        active_sink_ = sink;
         if (!message.is_object())
             return msg::error(Json(nullptr), rpc::INVALID_REQUEST,
                               "message must be a JSON object");
@@ -149,6 +203,14 @@ public:
         }
         if (method == "exit") return std::nullopt;  // convenience for local testing
 
+        // Cancellation arrives as a notification — handle before the
+        // generic "never reply to notifications" rule below.
+        if (method == "notifications/cancelled") {
+            if (const Json* rid = params.find("requestId"))
+                cancelled_ids_.insert(rid->dump());
+            return std::nullopt;
+        }
+
         // JSON-RPC: never reply to notifications, whatever the method says.
         if (!has_id) return std::nullopt;
 
@@ -160,18 +222,18 @@ public:
 
         // ---- utilities -------------------------------------------------
         if (method == "ping") return msg::response(id, Json::object());
-        if (method == "notifications/cancelled") return std::nullopt;  // sync handlers can't cancel
 
         // ---- tools -----------------------------------------------------
-        if (method == "tools/list") return msg::response(id, build_tools_list());
+        if (method == "tools/list") return msg::response(id, build_tools_list(params));
         if (method == "tools/call") return handle_tools_call(id, params);
 
         // ---- resources -------------------------------------------------
-        if (method == "resources/list") return msg::response(id, build_resources_list());
+        if (method == "resources/list")
+            return msg::response(id, build_resources_list(params));
         if (method == "resources/read") return handle_resources_read(id, params);
 
         // ---- prompts ---------------------------------------------------
-        if (method == "prompts/list") return msg::response(id, build_prompts_list());
+        if (method == "prompts/list") return msg::response(id, build_prompts_list(params));
         if (method == "prompts/get") return handle_prompts_get(id, params);
 
         // Unknown method: error for requests, silence for notifications.
@@ -191,7 +253,8 @@ private:
         std::string name;
         std::string description;
         Json input_schema;
-        ToolHandler handler;
+        ToolHandler handler;              // legacy one-argument form
+        ToolContextHandler ctx_handler;   // context-aware form (takes precedence)
     };
     struct Resource {
         std::string uri;
@@ -238,10 +301,27 @@ private:
         return result;
     }
 
-    Json build_tools_list() const {
+    // Opaque list cursor: an index into the registration order.
+    static size_t parse_cursor(const Json& params) {
+        std::string c = params.get_or<std::string>("cursor", "");
+        if (c.empty()) return 0;
+        return static_cast<size_t>(std::strtoull(c.c_str(), nullptr, 10));
+    }
+
+    void apply_page(const Json& params, size_t total, size_t& begin, size_t& end,
+                    Json& result) const {
+        begin = std::min(parse_cursor(params), total);
+        end = std::min(begin + options_.page_size, total);
+        if (end < total) result["nextCursor"] = std::to_string(end);
+    }
+
+    Json build_tools_list(const Json& params) const {
         Json result = Json::object();
+        size_t begin = 0, end = 0;
+        apply_page(params, tools_.size(), begin, end, result);
         result["tools"] = Json::array();
-        for (const auto& t : tools_) {
+        for (size_t i = begin; i < end; ++i) {
+            const auto& t = tools_[i];
             Json jt = Json::object();
             jt["name"] = t.name;
             jt["description"] = t.description;
@@ -266,8 +346,20 @@ private:
             return msg::error(id, rpc::INVALID_PARAMS, "\"arguments\" must be an object");
         if (!args) args = &empty_args;
 
+        ToolContext ctx;
+        if (const Json* meta = params.find("_meta")) {
+            if (const Json* token = meta->find("progressToken")) {
+                ctx.progress_token_ = *token;
+                ctx.has_token_ = true;
+            }
+        }
+        ctx.sink_ = active_sink_;
+        ctx.cancelled_ = cancelled_ids_.count(id.dump()) > 0;
+
         try {
-            return msg::response(id, it->handler(*args).to_json());
+            ToolResult result = it->ctx_handler  ? it->ctx_handler(*args, ctx)
+                                                 : it->handler(*args);
+            return msg::response(id, result.to_json());
         } catch (const RpcError& e) {
             return msg::error(id, e.code, e.what(), e.data);
         } catch (const std::exception& e) {
@@ -277,10 +369,13 @@ private:
         }
     }
 
-    Json build_resources_list() const {
+    Json build_resources_list(const Json& params) const {
         Json result = Json::object();
+        size_t begin = 0, end = 0;
+        apply_page(params, resources_.size(), begin, end, result);
         result["resources"] = Json::array();
-        for (const auto& r : resources_) {
+        for (size_t i = begin; i < end; ++i) {
+            const auto& r = resources_[i];
             Json jr = Json::object();
             jr["uri"] = r.uri;
             jr["name"] = r.name;
@@ -312,10 +407,13 @@ private:
         }
     }
 
-    Json build_prompts_list() const {
+    Json build_prompts_list(const Json& params) const {
         Json result = Json::object();
+        size_t begin = 0, end = 0;
+        apply_page(params, prompts_.size(), begin, end, result);
         result["prompts"] = Json::array();
-        for (const auto& p : prompts_) {
+        for (size_t i = begin; i < end; ++i) {
+            const auto& p = prompts_[i];
             Json jp = Json::object();
             jp["name"] = p.name;
             jp["description"] = p.description;
@@ -364,6 +462,8 @@ private:
     std::vector<Resource> resources_;
     std::vector<Prompt> prompts_;
     bool ready_ = false;
+    Transport* active_sink_ = nullptr;          // current message's transport
+    std::unordered_set<std::string> cancelled_ids_;
 };
 
 }  // namespace mcpp
