@@ -44,6 +44,7 @@ ctest --test-dir code-intel-mcp/build --output-on-failure   # 28 checks
 | `search_symbols {query, kind?, limit?}` | 符号名子串搜索 |
 | `list_symbols {path}` | 单文件符号清单 |
 | `grep {pattern, case_sensitive?, limit?}` | 跨文件字面量搜索 |
+| `references {symbol, limit?}` | 全词匹配找引用,定义标 `[def]`、使用标 `[use]`(内容缓存加速) |
 | `read_file {path, start_line?, end_line?}` | 带行号分页读文件 |
 
 实测(mcpp 源码,21 文件):索引 36ms(tree-sitter),查询亚毫秒;重索引仅扫

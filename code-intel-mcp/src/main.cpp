@@ -98,6 +98,23 @@ int main() {
         });
 
     server.add_tool(
+        "references",
+        "Find all word-boundary occurrences of a symbol across the index; "
+        "definitions are marked [def], uses [use]",
+        {{"symbol", "string", "exact symbol name (case-sensitive)"},
+         {"limit", "integer", "max results (default 50)"}},
+        [&](const Json& a) {
+            auto refs = index.references(a.get("symbol").as_string(),
+                                         static_cast<size_t>(a.get_or<int64_t>("limit", 50)));
+            if (refs.empty()) return ToolResult::text("(no references)");
+            std::ostringstream os;
+            for (const auto& r : refs)
+                os << (r.is_definition ? "[def]  " : "[use]  ") << r.file << ":" << r.line
+                   << ": " << r.text << "\n";
+            return ToolResult::text(os.str());
+        });
+
+    server.add_tool(
         "read_file", "Read a file with line numbers (paged)",
         {{"path", "string", "repository-relative path"},
          {"start_line", "integer", "1-based first line (default 1)"},

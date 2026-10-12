@@ -47,6 +47,18 @@
 - [x] 精确符号提取(构造/析构/operator=),28 项单测
 - [x] 增量重索引(mtime,单测覆盖)
 
+## 加固冲刺(v0.2.1,2026-10-12 ✅)
+
+- [x] 服务端参数校验(默认开启,-32602);基准更新为"双侧都带校验"的对等对比:11×
+- [x] 确定性 fuzz(fuzz_json 30 万次零失败 + fuzz_rpc 5 万次)进 ctest 与 CI;
+      **fuzz 首跑即抓到真实 bug**:数字溢出到 infinity 时往返断裂(已修+回归用例)
+- [x] HTTP 会话加固:TTL 过期、并发上限(503)、Origin 守卫(403,DNS-rebinding 防护)
+- [x] **加固测试抓到 v0.1 遗留 bug**:Connection: close 头解析 off-by-one 导致
+      keep-alive 误判(已修,`header_says_keep_alive` 改用 needle.size())
+- [x] CI 新增 sanitize job(ASan+UBSan 全量测试 + 加长 fuzz)
+- [x] code-intel:纯符号名(operator=/析构无签名噪声)、文件内容缓存、
+      references 工具(全词匹配,def/use 标注)、预计算小写搜索
+
 ## 阶段 3:第 7-10 周 — 差异化与发布(部分进行中)
 
 - [ ] mcpp README 对比表(cpp-mcp / TinyMCP / mcp-cpp / TSAR-MCP)

@@ -157,11 +157,85 @@ static void test_http_sessions() {
     server_thread.detach();
 }
 
+// --------------------------------------------------- argument validation
+
+static void test_argument_validation() {
+    McpServer server("valid.test", "1.0");
+    server.add_tool("add", "Add two integers",
+                    {{"a", "integer", "left"}, {"b", "integer", "right"}},
+                    [](const Json& a) {
+                        return ToolResult::text(std::to_string(a.get("a").as_int() +
+                                                               a.get("b").as_int()));
+                    });
+    server.handle_message(msg::notification("notifications/initialized"));
+
+    auto call = [](Json args) {
+        Json c = msg::request(Json(9), "tools/call");
+        c["params"]["name"] = "add";
+        c["params"]["arguments"] = std::move(args);
+        return c;
+    };
+    auto err_code = [](const std::optional<Json>& r) {
+        return r->get("error").get("code").as_int();
+    };
+    auto err_text = [](const std::optional<Json>& r) {
+        return r->get("error").get("message").as_string();
+    };
+
+    // valid arguments pass
+    Json ok_args = Json::object();
+    ok_args["a"] = 1;
+    ok_args["b"] = 2;
+    auto ok = server.handle_message(call(std::move(ok_args)));
+    CHECK(ok->contains("result"));
+
+    // missing required property
+    Json missing = Json::object();
+    missing["a"] = 1;
+    auto r1 = server.handle_message(call(std::move(missing)));
+    CHECK_EQ(err_code(r1), rpc::INVALID_PARAMS);
+    CHECK(err_text(r1).find("missing required property \"b\"") != std::string::npos);
+
+    // wrong type
+    Json wrong = Json::object();
+    wrong["a"] = "one";
+    wrong["b"] = 2;
+    auto r2 = server.handle_message(call(std::move(wrong)));
+    CHECK_EQ(err_code(r2), rpc::INVALID_PARAMS);
+    CHECK(err_text(r2).find("expected integer") != std::string::npos);
+
+    // extra unknown properties are allowed (schemas here are open)
+    Json extra = Json::object();
+    extra["a"] = 1;
+    extra["b"] = 2;
+    extra["verbose"] = true;
+    auto r3 = server.handle_message(call(std::move(extra)));
+    CHECK(r3->contains("result"));
+
+    // opting out restores lenient behaviour (handler sees the raw args)
+    ServerOptions lax;
+    lax.validate_arguments = false;
+    McpServer lenient("valid.test", "1.0", lax);
+    lenient.add_tool("add", "Add two integers",
+                     {{"a", "integer", "left"}, {"b", "integer", "right"}},
+                     [](const Json& a) {
+                         return ToolResult::text(std::to_string(
+                             a.get("a").as_int() + a.get_or<int64_t>("b", 0)));
+                     });
+    lenient.handle_message(msg::notification("notifications/initialized"));
+    Json partial = Json::object();
+    partial["a"] = 7;
+    auto r4 = lenient.handle_message(call(std::move(partial)));
+    CHECK_EQ(r4->get("result").get("content").at(0).get("text").as_string(),
+             std::string("7"));
+}
+
 int main() {
     test_pagination();
     test_progress_notifications();
     test_cancellation_checkpoint();
     test_http_sessions();
+    test_argument_validation();
     std::printf("test_features: %d checks, %d failures\n", mcpptest::g_checks,
                 mcpptest::g_failures);
     return mcpptest::g_failures == 0 ? 0 : 1;

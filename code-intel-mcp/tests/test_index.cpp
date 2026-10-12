@@ -41,8 +41,11 @@ int main() {
           "#include <string>\n"
           "class Widget {\n"
           "public:\n"
+          "    Widget() = default;\n"
+          "    ~Widget() {}\n"
           "    void spin(int n) { (void)n; }\n"
           "    int value() const { return 42; }\n"
+          "    Widget& operator=(const Widget& other) { (void)other; return *this; }\n"
           "};\n"
           "\n"
           "static Widget make_widget(const std::string& name) { (void)name; return Widget{}; }\n"
@@ -71,6 +74,8 @@ int main() {
     CHECK(has_symbol(cpp_syms, "spin", "method"));
     CHECK(has_symbol(cpp_syms, "value", "method"));
     CHECK(has_symbol(cpp_syms, "make_widget", "function"));
+    CHECK(has_symbol(cpp_syms, "~Widget", "method"));       // destructor kept pure
+    CHECK(has_symbol(cpp_syms, "operator=", "method"));     // no signature noise
     // prototypes/calls must NOT be symbols (precision)
     CHECK(!has_symbol(cpp_syms, "string", "class"));
 
@@ -126,9 +131,24 @@ int main() {
     CHECK(index.symbols_in_file("src/util.ts").empty());
     CHECK(index.file_count() == 2);
 
+    // ---- references: definitions marked, uses found ------------------------
+    auto refs = index.references("Widget", 50);
+    CHECK(refs.size() >= 4);  // class def, ctor def, operator= use, make_widget uses
+    bool saw_def = false, saw_use = false;
+    for (const auto& r : refs) {
+        if (r.file != "src/sample.cpp") continue;
+        if (r.is_definition) saw_def = true;
+        else if (r.text.find("make_widget") != std::string::npos) saw_use = true;
+    }
+    CHECK(saw_def);
+    CHECK(saw_use);
+    CHECK(index.references("NoSuchSymbolAnywhere", 10).empty());
+
     // ---- grep + read_file ---------------------------------------------------
     auto lines = index.grep("make_widget", true, 5);
-    CHECK(lines.size() == 1 && lines[0].find("src/sample.cpp:8") == 0);
+    CHECK(lines.size() == 1);
+    CHECK(lines[0].rfind("src/sample.cpp:", 0) == 0);
+    CHECK(lines[0].find("make_widget") != std::string::npos);
     auto body = index.read_file("src/sample.cpp", 2, 3);
     CHECK(body.has_value());
     CHECK(body->find("class Widget") != std::string::npos);

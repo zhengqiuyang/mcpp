@@ -87,6 +87,8 @@ int main() {
             g_tool_sink = client.call_tool("add", Json{{"a", 19}, {"b", 23}});
     });
 
-    std::printf("\nmessage size: %zu bytes; single thread; mcpp v0.1\n", std::strlen(kCallJson));
+    std::printf("\nmessage size: %zu bytes; single thread; mcpp %s (argument "
+                "validation ON)\n",
+                std::strlen(kCallJson), mcpp::kVersion);
     return 0;
 }

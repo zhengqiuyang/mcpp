@@ -532,6 +532,7 @@ private:
             errno = 0;
             double d = std::strtod(buf, &end);
             if (end != buf + len) fail("invalid number");
+            if (!std::isfinite(d)) fail("number out of range");  // 1e999 etc.
             return Json(d);
         }
     };

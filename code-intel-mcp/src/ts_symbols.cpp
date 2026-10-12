@@ -5,6 +5,7 @@
 
 #include "code_index.hpp"
 
+#include <cctype>
 #include <cstring>
 
 #include <tree_sitter/api.h>
@@ -59,7 +60,24 @@ struct Walk {
             if (ts_node_is_null(inner)) break;
             decl = inner;
         }
-        return ts_node_is_null(decl) ? "" : text_of(decl);
+        return ts_node_is_null(decl) ? "" : pure_identifier(text_of(decl));
+    }
+
+    // Reduce declarator text to a plain identifier: drop surrounding
+    // qualifiers/whitespace ("& operator=(const X&)" -> "operator=") while
+    // keeping destructor tildes.
+    static std::string pure_identifier(const std::string& t) {
+        std::string out;
+        for (char c : t)
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') out.push_back(c);
+        size_t p = out.find('(');
+        if (p != std::string::npos) out.resize(p);
+        size_t s = 0;
+        while (s < out.size() &&
+               !(std::isalnum(static_cast<unsigned char>(out[s])) || out[s] == '_' ||
+                 (out[s] == '~' && s == 0)))
+            ++s;
+        return out.substr(s);
     }
 
     bool inside_class_body(TSNode n) const {
@@ -77,7 +95,12 @@ struct Walk {
     void emit(std::string name, std::string kind, TSNode at) {
         if (name.empty() || name.size() > 256) return;
         TSPoint p = ts_node_start_point(at);
-        out.push_back({std::move(name), std::move(kind), "", static_cast<int64_t>(p.row) + 1});
+        Symbol s;
+        s.name = std::move(name);
+        s.kind = std::move(kind);
+        s.file = "";
+        s.line = static_cast<int64_t>(p.row) + 1;
+        out.push_back(std::move(s));
     }
 
     void visit(TSNode n, int depth) {

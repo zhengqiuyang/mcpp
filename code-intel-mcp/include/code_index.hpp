@@ -29,6 +29,14 @@ struct Symbol {
     std::string kind;  // function | method | class | struct | enum | definition
     std::string file;  // repository-relative path
     int64_t line = 0;  // 1-based
+    std::string name_lower;  // precomputed for case-insensitive search
+};
+
+struct Reference {
+    std::string file;
+    int64_t line = 0;
+    bool is_definition = false;
+    std::string text;  // trimmed source line
 };
 
 // tree-sitter based extraction (implemented in ts_symbols.cpp; only linked
@@ -68,6 +76,10 @@ public:
                                   size_t limit) const;
     std::optional<std::string> read_file(const std::string& rel, int64_t start,
                                          int64_t end) const;
+    // All case-sensitive word-boundary occurrences of `symbol` across cached
+    // file contents, marked as definition when they coincide with a known
+    // symbol of the same name.
+    std::vector<Reference> references(const std::string& symbol, size_t limit) const;
 
     size_t file_count() const { return files_.size(); }
     size_t symbol_count() const { return symbols_.size(); }
@@ -80,6 +92,8 @@ private:
         std::filesystem::file_time_type mtime{};
         std::vector<Symbol> symbols;
         std::string engine;  // "tree-sitter" | "lexical"
+        std::string content;  // cached file body when <= kMaxCachedBytes
+        static constexpr size_t kMaxCachedBytes = 4 * 1024 * 1024;
     };
 
     static std::string to_lower(std::string s) {
@@ -123,8 +137,8 @@ private:
     }
 
     FileEntry scan_file(const std::filesystem::path& abs, const std::string& rel);
-    static std::vector<Symbol> lexical_scan(std::ifstream& in, const std::string& rel,
-                                            const std::string& ext);
+    static std::vector<Symbol> lexical_scan(const std::string& content,
+                                            const std::string& rel, const std::string& ext);
 
     std::string root_;
     std::map<std::string, FileEntry> files_;  // rel path -> entry

@@ -78,6 +78,9 @@ static void test_parse_errors() {
     CHECK(throws_with("{'a':1}"));             // single quotes are not JSON
     CHECK(throws_with("[1 2]"));               // missing comma
     CHECK(throws_with("nul\x01"));             // control char in literal tail
+    CHECK(throws_with("1e999"));               // double overflow (found by fuzz)
+    CHECK(throws_with("-1e999"));              // negative overflow
+    CHECK(Json::parse("1e308").is_double());   // largest finite doubles still OK
     // error carries an offset
     try {
         Json::parse("[1,]");

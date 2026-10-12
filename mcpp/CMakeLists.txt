@@ -42,7 +42,8 @@ if(MCPP_BUILD_TESTS)
     enable_testing()
     find_package(Threads REQUIRED)
 
-    set(MCPP_TEST_TARGETS test_json test_protocol test_process test_http test_features)
+    set(MCPP_TEST_TARGETS test_json test_protocol test_process test_http
+                          test_features test_http_hardening)
     foreach(t IN ITEMS ${MCPP_TEST_TARGETS})
         add_executable(${t} tests/${t}.cpp)
         target_link_libraries(${t} PRIVATE mcpp Threads::Threads)
@@ -68,6 +69,17 @@ if(MCPP_BUILD_TESTS)
         set_tests_properties(mini_client_against_echo PROPERTIES PASS_REGULAR_EXPRESSION
             "PING")
     endif()
+
+    # randomized robustness (deterministic PRNGs, bounded iterations)
+    foreach(f IN ITEMS fuzz_json fuzz_rpc)
+        add_executable(${f} tests/${f}.cpp)
+        target_link_libraries(${f} PRIVATE mcpp)
+        target_compile_options(${f} PRIVATE ${MCPP_WARN_OPTS})
+        if(MCPP_STATIC_LINK)
+            target_link_options(${f} PRIVATE ${MCPP_STATIC_LINK})
+        endif()
+        add_test(NAME ${f} COMMAND ${f} 50000)
+    endforeach()
 
     add_executable(bench tests/bench.cpp)
     target_link_libraries(bench PRIVATE mcpp)

@@ -271,4 +271,73 @@ inline Json build_input_schema(const std::vector<ToolParam>& params) {
     return schema;
 }
 
+// Server-side argument validation against the JSON-Schema subset that
+// build_input_schema emits (plus enum/items/minimum/maximum for hand-written
+// schemas). Returns "" on success, a human-readable reason otherwise.
+// Deliberately small: full JSON Schema is out of scope for a zero-dependency
+// core; handlers remain the authority for anything not checked here.
+inline std::string validate_against_schema(const Json& value, const Json& schema) {
+    if (!schema.is_object()) return "";
+
+    if (const Json* t = schema.find("type")) {
+        if (t->is_string()) {
+            const std::string& ty = t->as_string();
+            bool ok = ty == "object"   ? value.is_object()
+                      : ty == "array"  ? value.is_array()
+                      : ty == "string" ? value.is_string()
+                      : ty == "boolean" ? value.is_bool()
+                      : ty == "integer" ? value.is_int()
+                      : ty == "number"  ? value.is_number()
+                      : ty == "null"    ? value.is_null()
+                                        : true;  // unknown type names pass
+            if (!ok) return "expected " + ty + ", got " + value.type_name();
+        }
+    }
+    if (const Json* en = schema.find("enum")) {
+        if (en->is_array()) {
+            bool found = false;
+            for (const Json& e : en->as_array())
+                if (e == value) { found = true; break; }
+            if (!found) return "value is not one of the allowed enum values";
+        }
+    }
+    if (const Json* mn = schema.find("minimum")) {
+        if (value.is_number() && value.as_double() < mn->as_double())
+            return "value is below the minimum";
+    }
+    if (const Json* mx = schema.find("maximum")) {
+        if (value.is_number() && value.as_double() > mx->as_double())
+            return "value is above the maximum";
+    }
+    if (value.is_object()) {
+        if (const Json* req = schema.find("required")) {
+            if (req->is_array())
+                for (const Json& r : req->as_array())
+                    if (!value.contains(r.as_string()))
+                        return "missing required property \"" + r.as_string() + "\"";
+        }
+        if (const Json* props = schema.find("properties")) {
+            if (props->is_object()) {
+                for (const auto& [k, v] : value.as_object()) {
+                    if (const Json* ps = props->find(k)) {
+                        std::string err = validate_against_schema(v, *ps);
+                        if (!err.empty()) return "property \"" + k + "\": " + err;
+                    }
+                }
+            }
+        }
+    }
+    if (value.is_array()) {
+        if (const Json* items = schema.find("items")) {
+            size_t i = 0;
+            for (const Json& el : value.as_array()) {
+                std::string err = validate_against_schema(el, *items);
+                if (!err.empty()) return "element " + std::to_string(i) + ": " + err;
+                ++i;
+            }
+        }
+    }
+    return "";
+}
+
 }  // namespace mcpp

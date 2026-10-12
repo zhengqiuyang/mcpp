@@ -34,6 +34,10 @@ struct ServerOptions {
     // Page size for tools/resources/prompts list responses. Spec clients page
     // via cursor; servers that always return everything may leave this large.
     size_t page_size = 1000;
+    // Validate tools/call arguments against each tool's inputSchema and
+    // reject mismatches with -32602 before the handler runs. Handlers should
+    // treat arguments as pre-checked when this is on (the default).
+    bool validate_arguments = true;
 };
 
 // Per-request context handed to two-argument tool handlers: progress
@@ -345,6 +349,12 @@ private:
         if (args && !args->is_object())
             return msg::error(id, rpc::INVALID_PARAMS, "\"arguments\" must be an object");
         if (!args) args = &empty_args;
+
+        if (options_.validate_arguments) {
+            std::string err = validate_against_schema(*args, it->input_schema);
+            if (!err.empty())
+                return msg::error(id, rpc::INVALID_PARAMS, "invalid arguments: " + err);
+        }
 
         ToolContext ctx;
         if (const Json* meta = params.find("_meta")) {

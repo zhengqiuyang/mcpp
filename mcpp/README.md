@@ -116,6 +116,9 @@ auto r = client.call_tool("add", mcpp::Json{{"a", 19}, {"b", 23}});
 | List pagination (`cursor`/`nextCursor`) | ✅ tools / resources / prompts |
 | `notifications/progress` (bound to `_meta.progressToken`) | ✅ via `ToolContext::report_progress` |
 | Request cancellation | ✅ cooperative checkpoints (`ToolContext::cancel_checkpoint` → -32800) |
+| Streamable HTTP sessions (Mcp-Session-Id + DELETE) | ✅ plus TTL expiry, session cap, Origin guard (DNS-rebinding) |
+| Server-side argument validation (JSON-Schema subset) | ✅ default on → -32602 before handlers run |
+| Fuzzing (JSON parser + RPC dispatch) | ✅ deterministic fuzzers in CI + sanitizer job |
 | Server-not-initialized gating (-32002) | ✅ |
 | Validated against official MCP Inspector CLI | ✅ initialize / tools/list / tools/call |
 | sampling / roots / elicitation (client-side agent features) | 🚧 roadmap |
@@ -125,17 +128,21 @@ auto r = client.call_tool("add", mcpp::Json{{"a", 19}, {"b", 23}});
 
 Apples-to-apples against the **official TypeScript SDK**
 (`@modelcontextprotocol/sdk` 1.32.1, node 24) — same workload (add tool,
-~130B message), in-memory transport, sequential round-trips, same machine:
+~130B message), in-memory transport, sequential round-trips, same machine,
+**and server-side argument validation enabled on both sides** (mcpp validates
+against each tool's inputSchema; the TS SDK validates via zod):
 
 | Full round-trip (wire ↔ dispatch) | ops/s | vs TS SDK |
 |---|---|---|
-| **mcpp** (C++17, MinGW GCC 16.2 `-O2`) | **~228,000** | **9.2×** |
-| TypeScript SDK 1.32.1 | ~24,800 | 1× |
+| **mcpp** (C++17, MinGW GCC 16.2 `-O2`, schema validation ON) | **~322,000** | **~11×** |
+| TypeScript SDK 1.32.1 (zod validation) | ~28,000 | 1× |
 
 Notably the raw JSON layers are comparable (V8's native `JSON` is fast);
-the gap is the protocol framework overhead (zod validation, promise
-pipeline). Micro-benchmarks (`tests/bench.cpp`, `benchmarks/ts-sdk/`):
-`Json::parse` ~1.36M/s, `Json::dump` ~3.08M/s, dispatch ~1.18M/s.
+the gap is the protocol framework overhead. Micro-benchmarks
+(`tests/bench.cpp`, `benchmarks/ts-sdk/`): `Json::parse` ~1.96M/s,
+`Json::dump` ~5M/s, dispatch ~1.03M/s. Deterministic fuzzers
+(`tests/fuzz_json.cpp`, `tests/fuzz_rpc.cpp`) run in CI and in the
+sanitizer job.
 
 ## Self-bootstrap: tested by the author's own MCP security tool
 

@@ -36,6 +36,25 @@ jobs:
       - name: Test
         run: ctest --test-dir mcpp/build -C Release --output-on-failure
 
+  # Memory/UB safety: the full test suite under AddressSanitizer +
+  # UndefinedBehaviorSanitizer, plus a longer fuzzing round.
+  sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure with sanitizers
+        run: >
+          cmake -S mcpp -B mcpp/build
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -g -O1"
+      - name: Build
+        run: cmake --build mcpp/build -j
+      - name: Test (sanitized)
+        run: ctest --test-dir mcpp/build --output-on-failure
+      - name: Extended fuzz (sanitized)
+        run: |
+          ./mcpp/build/fuzz_json 500000
+          ./mcpp/build/fuzz_rpc 200000
+
   # code-intel-mcp: tree-sitter precise symbols + incremental index tests
   code-intel:
     strategy:

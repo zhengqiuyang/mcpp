@@ -20,7 +20,8 @@
 #include <chrono>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
+#include <unordered_map>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -52,9 +53,21 @@ public:
                     // honor DELETE to terminate
     };
 
-    explicit HttpTransport(uint16_t port = 0, const std::string& bind_addr = "127.0.0.1",
-                           Mode mode = Mode::Stateless)
-        : mode_(mode) {
+    struct Limits {
+        // Sessions expire lazily when touched after this many seconds
+        // (0 = expire immediately; useful for tests).
+        int session_ttl_seconds = 3600;
+        // Cap on concurrent live sessions; initialize beyond it gets 503.
+        size_t max_sessions = 1024;
+        // When non-empty, browser requests must carry exactly this Origin
+        // (protection against DNS-rebinding per the MCP spec); non-browser
+        // clients that omit Origin are unaffected.
+        std::string allowed_origin;
+    };
+
+    explicit HttpTransport(uint16_t port, const std::string& bind_addr, Mode mode,
+                           Limits limits)
+        : mode_(mode), limits_(std::move(limits)) {
 #ifdef _WIN32
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) die("WSAStartup failed");
@@ -74,6 +87,10 @@ public:
         if (::listen(listener_, 16) != 0) die("listen() failed");
         port_ = bound_port();
     }
+
+    explicit HttpTransport(uint16_t port = 0, const std::string& bind_addr = "127.0.0.1",
+                           Mode mode = Mode::Stateless)
+        : HttpTransport(port, bind_addr, mode, Limits{}) {}
 
     ~HttpTransport() override {
         close_client();
@@ -117,7 +134,8 @@ public:
             // DELETE ends a session (Sessions mode only).
             if (method == "DELETE" && mode_ == Mode::Sessions) {
                 std::string sid = find_header(head, "mcp-session-id");
-                if (!sid.empty() && sessions_.erase(sid) > 0) {
+                if (session_live(sid)) {
+                    sessions_.erase(sid);
                     send_simple_status("200 OK", false);
                 } else {
                     send_simple_status("404 Not Found", false);
@@ -147,8 +165,17 @@ public:
             }
 
             // Session bookkeeping: initialize mints a session id; every other
-            // request must present a known one.
+            // request must present a known, unexpired one. Browsers must send
+            // an allowed Origin (DNS-rebinding guard).
             if (mode_ == Mode::Sessions) {
+                if (!limits_.allowed_origin.empty()) {
+                    std::string origin = find_header(head, "origin");
+                    if (!origin.empty() && origin != limits_.allowed_origin) {
+                        send_simple_status("403 Forbidden", false);
+                        close_client();
+                        continue;
+                    }
+                }
                 bool is_initialize = false;
                 try {
                     Json body = Json::parse(out);
@@ -157,11 +184,14 @@ public:
                 } catch (const Json::Error&) {
                 }
                 if (is_initialize) {
-                    cur_session_ = make_session_id();
-                    sessions_.insert(cur_session_);
+                    if (!mint_session()) {
+                        send_simple_status("503 Service Unavailable", false);
+                        close_client();
+                        continue;
+                    }
                 } else {
                     std::string sid = find_header(head, "mcp-session-id");
-                    if (sid.empty() || sessions_.count(sid) == 0) {
+                    if (!session_live(sid)) {
                         send_simple_status("400 Bad Request", false);
                         close_client();
                         continue;
@@ -318,6 +348,34 @@ private:
         return buf;
     }
 
+    using Clock = std::chrono::steady_clock;
+
+    // Expired-on-touch validity check; false for unknown ids.
+    bool session_live(const std::string& sid) {
+        if (sid.empty()) return false;
+        auto it = sessions_.find(sid);
+        if (it == sessions_.end()) return false;
+        if (limits_.session_ttl_seconds <= 0 ||
+            Clock::now() - it->second > std::chrono::seconds(limits_.session_ttl_seconds)) {
+            sessions_.erase(it);
+            return false;
+        }
+        return true;
+    }
+
+    // Sweep expired sessions; mint a fresh id if under the cap.
+    bool mint_session() {
+        if (limits_.session_ttl_seconds > 0) {
+            auto horizon = Clock::now() - std::chrono::seconds(limits_.session_ttl_seconds);
+            for (auto it = sessions_.begin(); it != sessions_.end();)
+                it = it->second < horizon ? sessions_.erase(it) : std::next(it);
+        }
+        if (sessions_.size() >= limits_.max_sessions) return false;
+        cur_session_ = make_session_id();
+        sessions_.emplace(cur_session_, Clock::now());
+        return true;
+    }
+
     // Case-insensitive header lookup; returns the trimmed value or "".
     static std::string find_header(const std::string& head, const std::string& name) {
         std::string lower_head = to_lower(head);
@@ -354,14 +412,15 @@ private:
 
     static bool header_says_keep_alive(const std::string& head) {
         std::string lower = to_lower(head);
-        size_t conn = lower.find("\r\nconnection:");
+        static const std::string kNeedle = "\r\nconnection:";
+        size_t conn = lower.find(kNeedle);
         if (conn != std::string::npos) {
-            size_t v = lower.find_first_not_of(" \t", conn + 12);
+            size_t v = lower.find_first_not_of(" \t", conn + kNeedle.size());
             if (v != std::string::npos && lower.compare(v, 5, "close") == 0) return false;
             return true;  // any other connection value / keep-alive
         }
         // HTTP/1.1 defaults to keep-alive; HTTP/1.0 defaults to close.
-        return lower.rfind("http/1.1", 0) == 0 || lower.find(" HTTP/1.1") != std::string::npos;
+        return lower.rfind("http/1.1", 0) == 0 || lower.find(" http/1.1") != std::string::npos;
     }
 
     SOCKET_T listener_ = kInvalid;
@@ -370,7 +429,8 @@ private:
     bool keep_alive_ = true;
     uint16_t port_ = 0;
     Mode mode_ = Mode::Stateless;
-    std::unordered_set<std::string> sessions_;
+    Limits limits_;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> sessions_;
     std::string cur_session_;
 };
 
