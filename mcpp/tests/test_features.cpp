@@ -154,7 +154,8 @@ static void test_http_sessions() {
         CHECK(rejected);
     }
 
-    server_thread.detach();
+    server_transport.stop();
+    server_thread.join();
 }
 
 // --------------------------------------------------- argument validation

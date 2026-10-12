@@ -93,7 +93,7 @@ public:
         : HttpTransport(port, bind_addr, mode, Limits{}) {}
 
     ~HttpTransport() override {
-        close_client();
+        stop();
         if (listener_ != kInvalid) close_socket(listener_);
 #ifdef _WIN32
         WSACleanup();
@@ -104,6 +104,21 @@ public:
     HttpTransport& operator=(const HttpTransport&) = delete;
 
     uint16_t port() const { return port_; }
+
+    // Wake a server thread blocked in accept()/read_message() so run()
+    // returns and the thread can be joined before the transport dies.
+    // Only the listener is touched (the serving thread owns the client
+    // socket); safe to call from another thread exactly once.
+    void stop() {
+        if (listener_ != kInvalid) {
+#ifdef _WIN32
+            ::closesocket(listener_);
+#else
+            ::shutdown(listener_, SHUT_RDWR);
+#endif
+            listener_ = kInvalid;
+        }
+    }
 
     // Blocks until one HTTP POST delivers a JSON-RPC message body.
     // Non-POST requests are answered 405 internally; connection errors close

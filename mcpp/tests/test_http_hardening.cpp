@@ -106,7 +106,8 @@ static void test_session_ttl() {
     std::string follow =
         raw_exchange(transport.port(), post(kPing, "Mcp-Session-Id: " + sid + "\r\n"));
     CHECK_EQ(status_of(follow), 400);
-    th.detach();
+    transport.stop();
+    th.join();
 }
 
 static void test_session_cap() {
@@ -119,7 +120,8 @@ static void test_session_cap() {
 
     CHECK_EQ(status_of(raw_exchange(transport.port(), post(kInit))), 200);
     CHECK_EQ(status_of(raw_exchange(transport.port(), post(kInit))), 503);  // cap
-    th.detach();
+    transport.stop();
+    th.join();
 }
 
 static void test_origin_guard() {
@@ -140,7 +142,8 @@ static void test_origin_guard() {
              200);
     // non-browser clients (no Origin header) are unaffected
     CHECK_EQ(status_of(raw_exchange(transport.port(), post(kPing))), 400);  // no session yet, but not 403
-    th.detach();
+    transport.stop();
+    th.join();
 }
 
 int main() {

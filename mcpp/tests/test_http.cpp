@@ -64,7 +64,8 @@ int main() {
         CHECK_EQ(r2.text_content(), std::string("2"));
     }
 
-    server_thread.detach();  // listener lives for the process lifetime
+    server_transport.stop();
+    server_thread.join();
     std::printf("test_http: %d checks, %d failures\n", mcpptest::g_checks, mcpptest::g_failures);
     return mcpptest::g_failures == 0 ? 0 : 1;
 }
