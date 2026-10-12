@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -40,6 +41,36 @@ public:
     };
 
     explicit McpClient(Transport& transport) : transport_(transport) {}
+
+    // ---- server-initiated traffic -----------------------------------------
+    //
+    // Requests the server may send us (sampling/createMessage, roots/list,
+    // elicitation/create, ping). Return the result object; throw
+    // McpRemoteError to answer with that error. Unhandled methods get
+    // METHOD_NOT_FOUND, which is spec-correct for unsupported capabilities.
+    void set_request_handler(const std::string& method,
+                             std::function<Json(const Json&)> handler) {
+        request_handlers_[method] = std::move(handler);
+    }
+    // Convenience: sampling/createMessage — return {role, content:{...}}.
+    void set_sampling_handler(std::function<Json(const Json&)> handler) {
+        set_request_handler("sampling/createMessage", std::move(handler));
+    }
+    // Convenience: roots/list — return a JSON array of {uri, name}.
+    void set_roots_handler(std::function<Json(const Json&)> handler) {
+        set_request_handler("roots/list", std::move(handler));
+    }
+    // Convenience: elicitation/create — return {action, content?}.
+    void set_elicitation_handler(std::function<Json(const Json&)> handler) {
+        set_request_handler("elicitation/create", std::move(handler));
+    }
+    // Notifications from the server (notifications/tools/list_changed,
+    // notifications/resources/updated, notifications/message,
+    // notifications/progress...). Unhandled notifications are ignored.
+    void set_notification_handler(const std::string& method,
+                                  std::function<void(const Json&)> handler) {
+        notification_handlers_[method] = std::move(handler);
+    }
 
     // Optional hook invoked when the transport has no data while awaiting a
     // response. Return true if the hook may have produced new input (the
@@ -131,17 +162,38 @@ private:
             }
             if (!m.is_object()) continue;
 
-            // Server -> client request (rare; answer pings, reject the rest).
+            // Server -> client request: answer pings, route the rest to
+            // registered handlers (sampling / roots / elicitation / custom).
             if (msg::has_method(m)) {
                 const std::string method = m.get_or<std::string>("method", "");
-                if (m.contains("id")) {
-                    Json reply = method == "ping"
-                                     ? msg::response(m.get("id"), Json::object())
-                                     : msg::error(m.get("id"), rpc::METHOD_NOT_FOUND,
-                                                  "client does not implement: " + method);
-                    transport_.write_message(reply.dump());
+                if (!m.contains("id")) {
+                    if (auto it = notification_handlers_.find(method);
+                        it != notification_handlers_.end())
+                        it->second(m.contains("params") ? m.get("params") : Json::object());
+                    continue;  // other notifications: ignore
                 }
-                continue;  // notifications: ignore
+                Json reply;
+                if (method == "ping") {
+                    reply = msg::response(m.get("id"), Json::object());
+                } else if (auto it = request_handlers_.find(method);
+                           it != request_handlers_.end()) {
+                    try {
+                        Json result = it->second(
+                            m.contains("params") ? m.get("params") : Json::object());
+                        reply = msg::response(m.get("id"), std::move(result));
+                    } catch (const McpRemoteError& e) {
+                        reply = msg::error(m.get("id"), e.code, e.what(), e.data);
+                    } catch (const std::exception& e) {
+                        reply = msg::error(m.get("id"), rpc::INTERNAL_ERROR, e.what());
+                    }
+                    transport_.write_message(reply.dump());
+                    continue;
+                } else {
+                    reply = msg::error(m.get("id"), rpc::METHOD_NOT_FOUND,
+                                       "client does not implement: " + method);
+                }
+                transport_.write_message(reply.dump());
+                continue;
             }
 
             // A response — is it ours?
@@ -161,6 +213,8 @@ private:
     int64_t next_id_ = 1;
     std::string server_version_;
     std::function<bool()> idle_hook_;
+    std::map<std::string, std::function<Json(const Json&)>> request_handlers_;
+    std::map<std::string, std::function<void(const Json&)>> notification_handlers_;
 };
 
 }  // namespace mcpp

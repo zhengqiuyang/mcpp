@@ -82,6 +82,9 @@ public:
     using ToolContextHandler = std::function<ToolResult(const Json&, ToolContext&)>;
     using ResourceHandler = std::function<std::string()>;  // returns the text body
     using PromptHandler = std::function<PromptResult(const Json& args)>;
+    // Returns candidate values for one prompt argument prefix.
+    using PromptCompleter =
+        std::function<std::vector<std::string>(const std::string& arg, const std::string& prefix)>;
 
     McpServer(std::string server_name, std::string server_version,
               ServerOptions options = {})
@@ -132,12 +135,64 @@ public:
 
     void add_prompt(std::string prompt_name, std::string description,
                     std::vector<ToolParam> args, PromptHandler handler) {
+        add_prompt(std::move(prompt_name), std::move(description), std::move(args),
+                   std::move(handler), nullptr);
+    }
+
+    void add_prompt(std::string prompt_name, std::string description,
+                    std::vector<ToolParam> args, PromptHandler handler,
+                    PromptCompleter completer) {
         Prompt p;
         p.name = std::move(prompt_name);
         p.description = std::move(description);
         p.args = std::move(args);
         p.handler = std::move(handler);
+        p.completer = std::move(completer);
         prompts_.push_back(std::move(p));
+    }
+
+    // ---------------------------------------------------- runtime mutation
+
+    // Remove a tool (no-op when absent). Pair with notify_tools_changed().
+    void remove_tool(const std::string& name) {
+        tools_.erase(std::remove_if(tools_.begin(), tools_.end(),
+                                    [&](const Tool& t) { return t.name == name; }),
+                     tools_.end());
+    }
+
+    bool has_tool(const std::string& name) const {
+        return std::any_of(tools_.begin(), tools_.end(),
+                           [&](const Tool& t) { return t.name == name; });
+    }
+
+    // ---- server-initiated notifications (need an active transport) ------
+
+    // Emit notifications/tools/list_changed so clients refetch tools/list.
+    void notify_tools_changed() {
+        if (active_sink_)
+            active_sink_->write_notification(
+                msg::notification("notifications/tools/list_changed").dump());
+    }
+
+    // Emit notifications/resources/updated for a subscribed resource.
+    void notify_resource_updated(const std::string& uri) {
+        if (!active_sink_ || subscribed_resources_.count(uri) == 0) return;
+        Json params = Json::object();
+        params["uri"] = uri;
+        active_sink_->write_notification(
+            msg::notification("notifications/resources/updated", std::move(params)).dump());
+    }
+
+    // Emit notifications/message (spec levels: debug|info|notice|warning|
+    // error|critical|alert|emergency).
+    void log(const std::string& level, const std::string& message, Json data = nullptr) {
+        if (!active_sink_) return;
+        Json params = Json::object();
+        params["level"] = level;
+        params["logger"] = name_;
+        params["data"] = data.is_null() ? Json(message) : std::move(data);
+        active_sink_->write_notification(
+            msg::notification("notifications/message", std::move(params)).dump());
     }
 
     // ------------------------------------------------------------- run loop
@@ -170,8 +225,11 @@ public:
 
     // Handle one parsed message. Never throws for input problems — malformed
     // requests produce error responses. Handler exceptions are caught.
+    // Passing a non-null `sink` enables server-initiated notifications
+    // (log/notify_tools_changed/...); the most recent sink is remembered so
+    // notifications keep flowing between messages on the same transport.
     std::optional<Json> handle_message(const Json& message, Transport* sink = nullptr) {
-        active_sink_ = sink;
+        if (sink) active_sink_ = sink;
         if (!message.is_object())
             return msg::error(Json(nullptr), rpc::INVALID_REQUEST,
                               "message must be a JSON object");
@@ -236,10 +294,33 @@ public:
         if (method == "resources/list")
             return msg::response(id, build_resources_list(params));
         if (method == "resources/read") return handle_resources_read(id, params);
+        if (method == "resources/subscribe" || method == "resources/unsubscribe") {
+            if (!params.contains("uri") || !params.get("uri").is_string())
+                return msg::error(id, rpc::INVALID_PARAMS, "requires string \"uri\"");
+            const std::string& uri = params.get("uri").as_string();
+            if (resource_unknown(uri))
+                return msg::error(id, rpc::INVALID_PARAMS, "unknown resource: " + uri);
+            if (method == "resources/subscribe") subscribed_resources_.insert(uri);
+            else subscribed_resources_.erase(uri);
+            return msg::response(id, Json::object());
+        }
 
         // ---- prompts ---------------------------------------------------
         if (method == "prompts/list") return msg::response(id, build_prompts_list(params));
         if (method == "prompts/get") return handle_prompts_get(id, params);
+        if (method == "completion/complete") return handle_completion(id, params);
+
+        // ---- logging ---------------------------------------------------
+        if (method == "logging/setLevel") {
+            std::string level = params.get_or<std::string>("level", "");
+            static const std::vector<std::string> kLevels = {
+                "debug", "info", "notice", "warning", "error",
+                "critical", "alert", "emergency"};
+            if (std::find(kLevels.begin(), kLevels.end(), level) == kLevels.end())
+                return msg::error(id, rpc::INVALID_PARAMS, "invalid log level: " + level);
+            log_level_ = level;
+            return msg::response(id, Json::object());
+        }
 
         // Unknown method: error for requests, silence for notifications.
         if (!has_id) return std::nullopt;
@@ -272,6 +353,7 @@ private:
         std::string description;
         std::vector<ToolParam> args;
         PromptHandler handler;
+        PromptCompleter completer;
     };
 
     Json build_initialize_result(const Json& params) {
@@ -285,13 +367,14 @@ private:
         Json caps = Json::object();
         if (!tools_.empty()) {
             caps["tools"] = Json::object();
-            caps["tools"]["listChanged"] = false;
+            caps["tools"]["listChanged"] = true;  // notify_tools_changed()
         }
         if (!resources_.empty()) {
             caps["resources"] = Json::object();
-            caps["resources"]["subscribe"] = false;
+            caps["resources"]["subscribe"] = true;
             caps["resources"]["listChanged"] = false;
         }
+        caps["logging"] = Json::object();  // logging/setLevel + log()
         if (!prompts_.empty()) {
             caps["prompts"] = Json::object();
             caps["prompts"]["listChanged"] = false;
@@ -466,6 +549,39 @@ private:
         }
     }
 
+    // True when the URI names no registered resource (reject subscribe).
+    bool resource_unknown(const std::string& uri) const {
+        return std::none_of(resources_.begin(), resources_.end(),
+                            [&](const Resource& r) { return r.uri == uri; });
+    }
+
+    std::optional<Json> handle_completion(const Json& id, const Json& params) {
+        const Json* ref = params.find("ref");
+        const Json* argument = params.find("argument");
+        if (!ref || ref->get_or<std::string>("type", "") != "ref/prompt" ||
+            !argument || !argument->contains("name"))
+            return msg::error(id, rpc::INVALID_PARAMS,
+                              "completion/complete requires ref/prompt and argument");
+        const std::string& name = ref->get("name").as_string();
+        auto it = std::find_if(prompts_.begin(), prompts_.end(),
+                               [&](const Prompt& p) { return p.name == name; });
+        if (it == prompts_.end())
+            return msg::error(id, rpc::INVALID_PARAMS, "unknown prompt: " + name);
+
+        std::vector<std::string> values;
+        if (it->completer)
+            values = it->completer(argument->get("name").as_string(),
+                                   argument->get_or<std::string>("value", ""));
+        Json completion = Json::object();
+        completion["values"] = Json::array();
+        for (auto& v : values) completion["values"].push_back(std::move(v));
+        completion["total"] = static_cast<int64_t>(values.size());
+        completion["hasMore"] = false;
+        Json result = Json::object();
+        result["completion"] = std::move(completion);
+        return msg::response(id, std::move(result));
+    }
+
     std::string name_;
     std::string version_;
     ServerOptions options_;
@@ -475,6 +591,8 @@ private:
     bool ready_ = false;
     Transport* active_sink_ = nullptr;          // current message's transport
     std::unordered_set<std::string> cancelled_ids_;
+    std::unordered_set<std::string> subscribed_resources_;
+    std::string log_level_ = "info";
 };
 
 }  // namespace mcpp

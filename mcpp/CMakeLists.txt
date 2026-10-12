@@ -43,7 +43,7 @@ if(MCPP_BUILD_TESTS)
     find_package(Threads REQUIRED)
 
     set(MCPP_TEST_TARGETS test_json test_protocol test_process test_http
-                          test_features test_http_hardening test_http_threaded)
+                          test_features test_http_hardening test_http_threaded test_v04)
     foreach(t IN ITEMS ${MCPP_TEST_TARGETS})
         add_executable(${t} tests/${t}.cpp)
         target_link_libraries(${t} PRIVATE mcpp Threads::Threads)

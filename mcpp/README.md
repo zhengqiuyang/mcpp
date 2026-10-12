@@ -117,6 +117,12 @@ auto r = client.call_tool("add", mcpp::Json{{"a", 19}, {"b", 23}});
 | List pagination (`cursor`/`nextCursor`) | ✅ tools / resources / prompts |
 | `notifications/progress` (bound to `_meta.progressToken`) | ✅ via `ToolContext::report_progress` |
 | Request cancellation | ✅ cooperative checkpoints (`ToolContext::cancel_checkpoint` → -32800) |
+| Logging (`logging/setLevel`, `notifications/message`) | ✅ `McpServer::log()` |
+| Prompt argument completion (`completion/complete`) | ✅ per-prompt `PromptCompleter` |
+| Resource subscriptions (`resources/subscribe` + updated) | ✅ `McpServer::notify_resource_updated` |
+| Dynamic tools (`remove_tool` + `tools/list_changed`) | ✅ |
+| Client: sampling / roots / elicitation handlers | ✅ server-initiated requests → callbacks |
+| Client: notification subscriptions | ✅ `set_notification_handler` |
 | Streamable HTTP sessions (Mcp-Session-Id + DELETE) | ✅ plus TTL expiry, session cap, Origin guard (DNS-rebinding) |
 | Concurrent HTTP + **SSE GET stream** | ✅ `ThreadedHttpTransport`: thread-per-connection, server-initiated notifications (`notifications/progress`) delivered via SSE; stalled clients cannot block others |
 | Server-side argument validation (JSON-Schema subset) | ✅ default on → -32602 before handlers run |
