@@ -108,15 +108,34 @@ public:
     // Wake a server thread blocked in accept()/read_message() so run()
     // returns and the thread can be joined before the transport dies.
     // Only the listener is touched (the serving thread owns the client
-    // socket); safe to call from another thread exactly once.
+    // socket). shutdown() reliably wakes accept on Linux, but not on all
+    // BSDs — a self-connect forces the accept loop through regardless.
     void stop() {
-        if (listener_ != kInvalid) {
+        SOCKET_T l = listener_;
+        if (l == kInvalid) return;
+        listener_ = kInvalid;
 #ifdef _WIN32
-            ::closesocket(listener_);
+        ::closesocket(l);
 #else
-            ::shutdown(listener_, SHUT_RDWR);
+        ::shutdown(l, SHUT_RDWR);
+        ::close(l);
 #endif
-            listener_ = kInvalid;
+        // belt and braces: poke the (former) listener so a thread already
+        // blocked inside accept() on the old descriptor returns
+        if (port_ != 0) {
+            SOCKET_T poke = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (poke != kInvalid) {
+                sockaddr_in a{};
+                a.sin_family = AF_INET;
+                a.sin_port = htons(port_);
+                a.sin_addr.s_addr = htonl(0x7F000001);
+                ::connect(poke, reinterpret_cast<sockaddr*>(&a), sizeof a);
+#ifdef _WIN32
+                ::closesocket(poke);
+#else
+                ::close(poke);
+#endif
+            }
         }
     }
 

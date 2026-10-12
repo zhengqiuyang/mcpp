@@ -53,6 +53,9 @@ if(MCPP_BUILD_TESTS)
         endif()
         add_test(NAME ${t} COMMAND ${t})
     endforeach()
+    # socket/thread tests: never let a platform quirk hang CI forever
+    set_tests_properties(test_http test_features test_http_hardening PROPERTIES
+                         TIMEOUT 120)
 
     # full child-process session against the bundled server
     if(TARGET echo_server)
