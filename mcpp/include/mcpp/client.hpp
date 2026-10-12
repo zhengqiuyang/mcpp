@@ -88,6 +88,7 @@ public:
 
     void notify(const std::string& method, Json params = nullptr) {
         transport_.write_message(msg::notification(method, std::move(params)).dump());
+        transport_.drain_response();
     }
 
     // Typed convenience: full initialize handshake. Call exactly once.

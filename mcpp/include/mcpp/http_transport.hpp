@@ -118,14 +118,8 @@ public:
         SOCKET_T l = listener_;
         if (l == kInvalid) return;
         listener_ = kInvalid;
-#ifdef _WIN32
-        ::closesocket(l);
-#else
-        ::shutdown(l, SHUT_RDWR);
-        ::close(l);
-#endif
-        // belt and braces: poke the (former) listener so a thread already
-        // blocked inside accept() on the old descriptor returns
+        // Poke BEFORE closing: a blocked accept() is not reliably woken by
+        // closesocket on Windows; the poke connection gets it unstuck.
         if (port_ != 0) {
             SOCKET_T poke = ::socket(AF_INET, SOCK_STREAM, 0);
             if (poke != kInvalid) {
@@ -141,6 +135,26 @@ public:
 #endif
             }
         }
+#ifdef _WIN32
+        ::closesocket(l);
+#else
+        ::shutdown(l, SHUT_RDWR);
+        ::close(l);
+#endif
+        // With keep-alive the serving thread may instead be blocked reading
+        // the next request on an idle connection. Windows: only closesocket
+        // reliably wakes a blocked recv (shutdown does not); the serving
+        // thread then sees an invalid descriptor and exits without closing
+        // again. POSIX: shutdown wakes it, the serving thread closes.
+#ifdef _WIN32
+        if (client_ != kInvalid) {
+            ::closesocket(client_);
+            client_ = kInvalid;
+            client_released_ = true;  // serving thread must not close again
+        }
+#else
+        if (client_ != kInvalid) ::shutdown(client_, SHUT_RDWR);
+#endif
     }
 
     // Blocks until one HTTP POST delivers a JSON-RPC message body.
@@ -305,10 +319,39 @@ private:
     }
 
     void close_client() {
-        if (client_ != kInvalid) {
-            close_socket(client_);
+        if (client_ == kInvalid) return;
+#ifdef _WIN32
+        if (client_released_) {  // stop() already closed it for us
+            client_released_ = false;
             client_ = kInvalid;
+            pending_.clear();
+            return;
         }
+#endif
+        // Graceful close: shutdown flushes queued response bytes as FIN
+        // (a bare closesocket can emit RST and destroy the response on
+        // BSD/macOS), then a bounded drain lets the peer finish its side.
+#ifdef _WIN32
+        DWORD ms = 250;
+        ::setsockopt(client_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&ms),
+                     sizeof ms);
+#else
+        timeval tv{0, 250 * 1000};
+        ::setsockopt(client_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+#endif
+        ::shutdown(client_,
+#ifdef _WIN32
+                   SD_BOTH
+#else
+                   SHUT_RDWR
+#endif
+        );
+        char sink[512];
+        for (int i = 0; i < 64; ++i) {
+            if (::recv(client_, sink, sizeof sink, 0) <= 0) break;
+        }
+        close_socket(client_);
+        client_ = kInvalid;
         pending_.clear();
     }
 
@@ -472,6 +515,7 @@ private:
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> sessions_;
     std::string cur_session_;
     std::string last_request_head_;
+    bool client_released_ = false;  // stop() closed client_ (Windows wake)
 };
 
 }  // namespace mcpp

@@ -4,7 +4,7 @@
 // and remote errors.
 #include "mcpp/client.hpp"
 #include "mcpp/http_client_transport.hpp"
-#include "mcpp/http_transport.hpp"
+#include "mcpp/threaded_http_transport.hpp"
 #include "mcpp/server.hpp"
 #include "test_util.hpp"
 
@@ -26,7 +26,11 @@ int main() {
                                                                a.get("b").as_int()));
                     });
 
-    HttpTransport server_transport(0 /* pick a port */);
+    // Threaded transport: the test drives two keep-alive clients at once,
+    // which the single-threaded accept loop cannot multiplex.
+    ThreadedHttpTransport server_transport(0, "127.0.0.1",
+                                           ThreadedHttpTransport::Mode::Stateless,
+                                           ThreadedHttpTransport::Limits{});
     const uint16_t port = server_transport.port();
     CHECK(port != 0);
 

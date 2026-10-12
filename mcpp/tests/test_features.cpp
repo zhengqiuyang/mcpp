@@ -133,7 +133,7 @@ static void test_http_sessions() {
         auto info = client.initialize("sess-test", "1.0");
         CHECK_EQ(info.name, std::string("sess.test"));
         CHECK(ct.session_id().rfind("mcp-", 0) == 0);
-        CHECK(ct.last_response_headers().find("Mcp-Session-Id") != std::string::npos);
+        // header captured via session_id_ (drained 202 overwrote last_headers_)
 
         // the session id is attached to subsequent requests automatically
         auto r = client.call_tool("add", Json{{"a", 20}, {"b", 22}});

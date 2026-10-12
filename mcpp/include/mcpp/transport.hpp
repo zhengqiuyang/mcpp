@@ -27,6 +27,11 @@ public:
     // to the reply path, which is correct for stdio; stream-capable
     // transports override it (HTTP delivers these on the SSE stream).
     virtual void write_notification(const std::string& msg) { write_message(msg); }
+    // After sending a notification (no response is expected at the protocol
+    // level), transports that DO answer every message at the wire level
+    // (HTTP 202) drain that answer here so nothing is left unread on a
+    // persistent connection. Default: nothing to do.
+    virtual void drain_response() {}
 };
 
 // Newline-delimited JSON over the process stdin/stdout, per the MCP stdio

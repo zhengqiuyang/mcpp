@@ -127,26 +127,28 @@ public:
 
     void stop() {
         if (stopping_.exchange(true)) return;
+        // Poke BEFORE closing the listener: a blocked accept() is not
+        // reliably woken by closesocket on Windows, but it does return the
+        // poke connection (which then dies on read and exits the worker).
+        poke();
         if (listener_ != kInvalid) {
 #ifdef _WIN32
             ::closesocket(listener_);
 #else
             ::shutdown(listener_, SHUT_RDWR);
-#endif
-            poke();
-#ifdef _WIN32
-            // closesocket above already released the descriptor
-#else
             ::close(listener_);
 #endif
             listener_ = kInvalid;
         }
+        if (acceptor_.joinable()) acceptor_.join();
+        // Only the acceptor creates connections; once it has joined, this
+        // close pass covers everything (a pass before the join would miss a
+        // connection accepted in between, leaving its worker blocked).
         {
             std::lock_guard<std::mutex> lk(mtx_);
             for (auto& c : conns_) c->close_now();
             cv_.notify_all();
         }
-        if (acceptor_.joinable()) acceptor_.join();
         std::vector<std::thread> workers;
         {
             std::lock_guard<std::mutex> lk(mtx_);
@@ -174,13 +176,17 @@ private:
 
         explicit Conn(SOCKET_T f) : fd(f) {}
         ~Conn() {
-            if (fd != kInvalid) {
+            // On Windows close_now() already released the descriptor (only
+            // closesocket reliably wakes a blocked recv there; shutdown
+            // does not).
 #ifdef _WIN32
-                ::closesocket(fd);
+            if (fd != kInvalid && !closed.load()) ::closesocket(fd);
 #else
+            if (fd != kInvalid) {
+                ::shutdown(fd, SHUT_RDWR);  // wake blocked readers first
                 ::close(fd);
-#endif
             }
+#endif
         }
 
         bool send(const std::string& bytes) {
@@ -199,7 +205,7 @@ private:
         void close_now() {
             if (closed.exchange(true)) return;
 #ifdef _WIN32
-            ::shutdown(fd, SD_BOTH);
+            ::closesocket(fd);  // wakes a recv blocked in another thread
 #else
             ::shutdown(fd, SHUT_RDWR);
 #endif

@@ -93,7 +93,7 @@ public:
     void end_session() {
         if (session_id_.empty()) return;
         sent_ = false;
-        send_request("DELETE");
+        send_request("DELETE", /*with_body=*/false);
         std::string head;
         char chunk[2048];
         while (head.find("\r\n\r\n") == std::string::npos) {
@@ -105,13 +105,22 @@ public:
         session_id_.clear();
     }
 
-    // Fires the POST immediately. Requests are answered by read_message;
-    // notifications (no response expected) simply leave the 202 unread on a
-    // closed connection — the socket is recycled on the next message.
+    // Sends the queued POST immediately. Requests are answered by
+    // read_message. The connection is kept alive across messages when the
+    // server allows it (per-message connections rapidly reuse the same
+    // loopback 4-tuple and can receive stale RSTs from the kernel).
     void write_message(const std::string& msg) override {
         pending_ = msg;
         sent_ = false;
         send_pending();
+    }
+
+    // HTTP answers every POST (notifications get 202); drain that answer so
+    // nothing is left unread on the persistent connection.
+    void drain_response() override {
+        if (!sent_) return;
+        std::string scratch;
+        read_one(scratch);
     }
 
     // Reads the response body (HTTP 200) for the pending request — or
@@ -119,12 +128,19 @@ public:
     bool read_message(std::string& out) override {
         out.clear();
         if (!send_pending()) return false;
+        return read_one(out);
+    }
 
+    // Reads one already-sent request's response from the live connection.
+    bool read_one(std::string& out) {
         std::string head;
         char chunk[8192];
         while (head.find("\r\n\r\n") == std::string::npos) {
             int n = static_cast<int>(::recv(sock_, chunk, sizeof chunk, 0));
-            if (n <= 0) { close_socket_if_open(); return false; }
+            if (n <= 0) {
+                close_socket_if_open();
+                return false;
+            }
             head.append(chunk, static_cast<size_t>(n));
         }
         size_t body_at = head.find("\r\n\r\n") + 4;
@@ -142,7 +158,12 @@ public:
 
         // status line: HTTP/1.1 200 OK
         int status = std::atoi(head.c_str() + head.find(' ') + 1);
-        if (status == 202) { close_socket_if_open(); return false; }  // notification
+        bool server_closes = to_lower_copy(head).find("\r\nconnection: close") !=
+                             std::string::npos;
+        if (status == 202) {  // notification accepted: nothing for the client
+            if (server_closes) close_socket_if_open();
+            return false;
+        }
         if (status != 200) {
             close_socket_if_open();
             throw std::runtime_error("mcpp::HttpClientTransport: HTTP " +
@@ -156,12 +177,18 @@ public:
         body.resize(content_length);  // grow FIRST so recv writes inside bounds
         size_t filled = preloaded;
         while (filled < content_length) {
-            int n = static_cast<int>(::recv(sock_, &body[filled], content_length - filled, 0));
-            if (n <= 0) { close_socket_if_open(); return false; }
+            int n = static_cast<int>(
+                ::recv(sock_, &body[filled], content_length - filled, 0));
+            if (n <= 0) {
+                close_socket_if_open();
+                return false;
+            }
             filled += static_cast<size_t>(n);
         }
         out = std::move(body);
-        close_socket_if_open();  // Connection: close — one message per socket
+        // Honour the server's connection preference: keep the socket for the
+        // next message unless it asked us to close.
+        if (server_closes) close_socket_if_open();
         return true;
     }
 
@@ -186,54 +213,76 @@ private:
 #endif
     }
 
+    // Graceful teardown: shutdown + bounded drain before closesocket.
+    // Closing with unread bytes in the receive buffer makes the kernel emit
+    // RST (observed breaking the NEXT connection on loopback), so every
+    // close drains first.
     void close_socket_if_open() {
-        if (sock_ != kInvalid) {
-            close_socket_raw(sock_);
-            sock_ = kInvalid;
+        if (sock_ == kInvalid) return;
+#ifdef _WIN32
+        DWORD ms = 250;
+        ::setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&ms),
+                     sizeof ms);
+#else
+        timeval tv{0, 250 * 1000};
+        ::setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+#endif
+        ::shutdown(sock_,
+#ifdef _WIN32
+                   SD_BOTH
+#else
+                   SHUT_RDWR
+#endif
+        );
+        char sink[512];
+        for (int i = 0; i < 64; ++i) {
+            if (::recv(sock_, sink, sizeof sink, 0) <= 0) break;
         }
+        close_socket_raw(sock_);
+        sock_ = kInvalid;
     }
 
     bool send_pending() {
         if (sent_) return true;
-        send_request("POST");
-        send_all(pending_.data(), pending_.size());
+        send_request("POST", /*with_body=*/true);
         sent_ = true;
         return true;
     }
 
-    // Opens a fresh connection and writes the request head + (for POST) the
-    // body. DELETE carries none.
-    void send_request(const char* method) {
-        close_socket_if_open();
-
-        addrinfo hints{};
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        addrinfo* res = nullptr;
-        if (::getaddrinfo(host_.c_str(), std::to_string(port_).c_str(), &hints, &res) != 0 ||
-            !res)
-            die("cannot resolve host");
-        sock_ = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (sock_ == kInvalid) { ::freeaddrinfo(res); die("socket() failed"); }
-        if (::connect(sock_, res->ai_addr, res->ai_addrlen) != 0) {
-            ::freeaddrinfo(res);
+    // Writes the request head (+ body for POST) on the current connection,
+    // establishing one first when needed. Every call transmits a full
+    // request; only the connection setup is conditional on reuse.
+    void send_request(const char* method, bool with_body) {
+        if (sock_ == kInvalid) {  // establish the keep-alive connection
             close_socket_if_open();
-            die("connect() failed");
+            addrinfo hints{};
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            addrinfo* res = nullptr;
+            if (::getaddrinfo(host_.c_str(), std::to_string(port_).c_str(), &hints, &res) != 0 ||
+                !res)
+                die("cannot resolve host");
+            sock_ = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+            if (sock_ == kInvalid) { ::freeaddrinfo(res); die("socket() failed"); }
+            if (::connect(sock_, res->ai_addr, res->ai_addrlen) != 0) {
+                ::freeaddrinfo(res);
+                close_socket_if_open();
+                die("connect() failed");
+            }
+            ::freeaddrinfo(res);
         }
-        ::freeaddrinfo(res);
 
         std::string hdr = std::string(method) + " " + path_ + " HTTP/1.1\r\n" +
                           "Host: " + host_port_ + "\r\n" +
                           "Content-Type: application/json\r\n" +
-                          "Accept: application/json\r\n" +
-                          "Connection: close\r\n";
+                          "Accept: application/json\r\n";  // HTTP/1.1: keep-alive default
         if (!session_id_.empty()) hdr += "Mcp-Session-Id: " + session_id_ + "\r\n";
         for (const auto& [name, value] : extra_headers_)
             hdr += name + ": " + value + "\r\n";
         hdr += "Content-Length: " +
-               std::to_string(method[0] == 'P' ? pending_.size() : size_t(0)) + "\r\n\r\n";
+               std::to_string(with_body ? pending_.size() : size_t(0)) + "\r\n\r\n";
         send_all(hdr.data(), hdr.size());
-        if (method[0] == 'P') send_all(pending_.data(), pending_.size());
+        if (with_body) send_all(pending_.data(), pending_.size());
     }
 
     bool send_all(const char* data, size_t n) {
