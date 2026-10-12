@@ -20,7 +20,8 @@ int main(int argc, char** argv) {
     McpServer server("com.zqy.mcpp.example.http-echo", "0.1.0",
                      ServerOptions{"echo/add over Streamable HTTP (POST-only, stateless v0.1)"});
     server.add_tool("echo", "Echo the message back",
-                    {{"message", "string", "text to return"}, {"upper", "boolean", "uppercase"}},
+                    {{"message", "string", "text to return"},
+                     {"upper", "boolean", "uppercase", /*required=*/false}},
                     [](const Json& a) {
                         std::string s = a.get_or<std::string>("message", "");
                         if (a.get_or<bool>("upper", false))

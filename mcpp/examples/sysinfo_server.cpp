@@ -40,7 +40,8 @@ int main() {
     });
 
     server.add_tool("disk_usage", "Disk usage for a directory",
-                    {{"path", "string", "directory to inspect (default: .)"}},
+                    {{"path", "string", "directory to inspect (default: .)",
+                      /*required=*/false}},
                     [](const Json& a) {
                         return ToolResult::text(disk_usage(a.get_or<std::string>("path", ".")));
                     });

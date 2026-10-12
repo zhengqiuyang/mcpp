@@ -15,7 +15,7 @@ int main() {
 
     server.add_tool("echo", "Echo the message back",
                     {{"message", "string", "text to return"},
-                     {"upper", "boolean", "uppercase the reply"}},
+                     {"upper", "boolean", "uppercase the reply", /*required=*/false}},
                     [](const Json& a) {
                         std::string s = a.get_or<std::string>("message", "");
                         if (a.get_or<bool>("upper", false))

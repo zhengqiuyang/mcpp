@@ -64,8 +64,8 @@ int main() {
     server.add_tool(
         "search_symbols", "Find symbols by substring of the name",
         {{"query", "string", "substring of symbol name"},
-         {"kind", "string", "filter: function|class|struct|enum|method|definition"},
-         {"limit", "integer", "max results (default 30)"}},
+         {"kind", "string", "filter: function|class|struct|enum|method|definition", false},
+         {"limit", "integer", "max results (default 30)", false}},
         [&](const Json& a) {
             auto hits = index.search(a.get("query").as_string(),
                                      a.get_or<std::string>("kind", ""),
@@ -85,8 +85,8 @@ int main() {
         "grep",
         "Literal substring search across indexed files (case-insensitive by default)",
         {{"pattern", "string", "substring to find"},
-         {"case_sensitive", "boolean", "match case exactly"},
-         {"limit", "integer", "max results (default 50)"}},
+         {"case_sensitive", "boolean", "match case exactly", false},
+         {"limit", "integer", "max results (default 50)", false}},
         [&](const Json& a) {
             auto hits = index.grep(a.get("pattern").as_string(),
                                    a.get_or<bool>("case_sensitive", false),
@@ -102,7 +102,7 @@ int main() {
         "Find all word-boundary occurrences of a symbol across the index; "
         "definitions are marked [def], uses [use]",
         {{"symbol", "string", "exact symbol name (case-sensitive)"},
-         {"limit", "integer", "max results (default 50)"}},
+         {"limit", "integer", "max results (default 50)", false}},
         [&](const Json& a) {
             auto refs = index.references(a.get("symbol").as_string(),
                                          static_cast<size_t>(a.get_or<int64_t>("limit", 50)));
@@ -117,8 +117,8 @@ int main() {
     server.add_tool(
         "read_file", "Read a file with line numbers (paged)",
         {{"path", "string", "repository-relative path"},
-         {"start_line", "integer", "1-based first line (default 1)"},
-         {"end_line", "integer", "last line inclusive (default start+200)"}},
+         {"start_line", "integer", "1-based first line (default 1)", false},
+         {"end_line", "integer", "last line inclusive (default start+200)", false}},
         [&](const Json& a) {
             int64_t start = std::max<int64_t>(1, a.get_or<int64_t>("start_line", 1));
             int64_t end = a.get_or<int64_t>("end_line", start + 200);
