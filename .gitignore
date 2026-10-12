@@ -23,3 +23,5 @@ package-lock.json
 
 # mcp-test fixtures
 mcpp/tests/fixture/
+# unpublished launch drafts — kept local, never pushed
+docs/launch/
