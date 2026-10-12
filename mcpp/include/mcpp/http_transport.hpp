@@ -105,6 +105,10 @@ public:
 
     uint16_t port() const { return port_; }
 
+    // Head (request line + headers) of the most recent request — test and
+    // diagnostics hook.
+    const std::string& last_request_head() const { return last_request_head_; }
+
     // Wake a server thread blocked in accept()/read_message() so run()
     // returns and the thread can be joined before the transport dies.
     // Only the listener is touched (the serving thread owns the client
@@ -318,7 +322,8 @@ private:
             if (end != std::string::npos) {
                 head = pending_.substr(0, end + 4);
                 pending_.erase(0, end + 4);
-                keep_alive_ = header_says_keep_alive(head);
+                last_request_head_ = head;
+            keep_alive_ = header_says_keep_alive(head);
                 return true;
             }
             if (pending_.size() > 64 * 1024) return false;
@@ -466,6 +471,7 @@ private:
     Limits limits_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> sessions_;
     std::string cur_session_;
+    std::string last_request_head_;
 };
 
 }  // namespace mcpp

@@ -55,6 +55,7 @@ Design principles:
 | `include/mcpp/http_client_transport.hpp` | Streamable HTTP client (one connection per message) |
 | `include/mcpp/server.hpp` | `McpServer`: registration API + dispatch loop |
 | `include/mcpp/client.hpp` | `McpClient`: initialize / list_tools / call_tool |
+| `include/mcpp/agent.hpp` | Tool-calling agent loop + OpenAI-compatible LLM backend (~150 lines, zero dependencies) |
 | `examples/` | echo, sandboxed filesystem, sysinfo, http echo servers + `mini_client` |
 | `tests/` | JSON/protocol/process tests + `bench` micro-benchmarks |
 
@@ -151,6 +152,33 @@ the gap is the protocol framework overhead. Micro-benchmarks
 `Json::dump` ~5M/s, dispatch ~1.03M/s. Deterministic fuzzers
 (`tests/fuzz_json.cpp`, `tests/fuzz_rpc.cpp`) run in CI and in the
 sanitizer job.
+
+## Agent loop — the SDK eats its own dog food
+
+`agent.hpp` is a complete tool-calling agent built only from mcpp pieces:
+an OpenAI-compatible chat backend riding `HttpClientTransport` (llama-server,
+vLLM, Ollama, or cloud APIs — with auth headers), and a tool registry that
+is just an `McpClient`. It is the seed of the planned edge-agent runtime:
+
+```cpp
+mcpp::OpenAiChatBackend llm("http://127.0.0.1:8080/v1", "qwen2.5");
+mcpp::ProcessTransport tools({"./code-intel-mcp"});
+mcpp::McpClient mcp(tools);
+mcpp::Agent agent(llm, mcp, "You are a terse coding assistant.");
+auto r = agent.run("Where is McpServer defined?", 8);
+```
+
+Try the CLI (`examples/llama_agent.cpp`):
+
+```bash
+./llama_agent --mcp ./code-intel-mcp \
+              --llm http://127.0.0.1:8080/v1 --model qwen2.5 \
+              --prompt "Where is McpServer defined?"
+```
+
+`tests/test_agent.cpp` runs the full loop against a scripted mock LLM served
+by mcpp's own HTTP transport — zero external dependencies, including
+assertions that tool results are fed back and custom auth headers arrive.
 
 ## Self-bootstrap: tested by the author's own MCP security tool
 

@@ -28,7 +28,7 @@ if(WIN32 AND NOT MSVC)
 endif()
 
 if(MCPP_BUILD_EXAMPLES)
-    foreach(example IN ITEMS echo_server filesystem_server sysinfo_server mini_client http_echo_server)
+    foreach(example IN ITEMS echo_server filesystem_server sysinfo_server mini_client http_echo_server llama_agent)
         add_executable(${example} examples/${example}.cpp)
         target_link_libraries(${example} PRIVATE mcpp)
         target_compile_options(${example} PRIVATE ${MCPP_WARN_OPTS})
@@ -43,7 +43,8 @@ if(MCPP_BUILD_TESTS)
     find_package(Threads REQUIRED)
 
     set(MCPP_TEST_TARGETS test_json test_protocol test_process test_http
-                          test_features test_http_hardening test_http_threaded test_v04)
+                          test_features test_http_hardening test_http_threaded
+                          test_v04 test_agent)
     foreach(t IN ITEMS ${MCPP_TEST_TARGETS})
         add_executable(${t} tests/${t}.cpp)
         target_link_libraries(${t} PRIVATE mcpp Threads::Threads)
@@ -55,7 +56,7 @@ if(MCPP_BUILD_TESTS)
     endforeach()
     # socket/thread tests: never let a platform quirk hang CI forever
     set_tests_properties(test_http test_features test_http_hardening
-                         test_http_threaded PROPERTIES TIMEOUT 120)
+                         test_http_threaded test_agent PROPERTIES TIMEOUT 120)
 
     # full child-process session against the bundled server
     if(TARGET echo_server)

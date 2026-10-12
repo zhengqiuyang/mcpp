@@ -13,6 +13,8 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -80,6 +82,12 @@ public:
     const std::string& session_id() const { return session_id_; }
     // Raw response head of the last read (diagnostics/tests).
     const std::string& last_response_headers() const { return last_headers_; }
+
+    // Attach an extra header to every subsequent request (e.g.
+    // "Authorization: Bearer <key>" for LLM APIs). Appends, not replaces.
+    void set_header(std::string name, std::string value) {
+        extra_headers_.emplace_back(std::move(name), std::move(value));
+    }
 
     // Terminate a session (DELETE). No-op when no session is held.
     void end_session() {
@@ -193,8 +201,8 @@ private:
         return true;
     }
 
-    // Opens a fresh connection and writes the request head. POST bodies are
-    // sent by the caller; DELETE carries none.
+    // Opens a fresh connection and writes the request head + (for POST) the
+    // body. DELETE carries none.
     void send_request(const char* method) {
         close_socket_if_open();
 
@@ -214,21 +222,18 @@ private:
         }
         ::freeaddrinfo(res);
 
-        char header[640];
-        int n = std::snprintf(header, sizeof header,
-                              "%s %s HTTP/1.1\r\n"
-                              "Host: %s\r\n"
-                              "Content-Type: application/json\r\n"
-                              "Accept: application/json\r\n"
-                              "Connection: close\r\n"
-                              "%s"
-                              "Content-Length: %zu\r\n\r\n",
-                              method, path_.c_str(), host_port_.c_str(),
-                              session_id_.empty()
-                                  ? ""
-                                  : ("Mcp-Session-Id: " + session_id_ + "\r\n").c_str(),
-                              method[0] == 'D' ? 0 : pending_.size());
-        send_all(header, static_cast<size_t>(n));
+        std::string hdr = std::string(method) + " " + path_ + " HTTP/1.1\r\n" +
+                          "Host: " + host_port_ + "\r\n" +
+                          "Content-Type: application/json\r\n" +
+                          "Accept: application/json\r\n" +
+                          "Connection: close\r\n";
+        if (!session_id_.empty()) hdr += "Mcp-Session-Id: " + session_id_ + "\r\n";
+        for (const auto& [name, value] : extra_headers_)
+            hdr += name + ": " + value + "\r\n";
+        hdr += "Content-Length: " +
+               std::to_string(method[0] == 'P' ? pending_.size() : size_t(0)) + "\r\n\r\n";
+        send_all(hdr.data(), hdr.size());
+        if (method[0] == 'P') send_all(pending_.data(), pending_.size());
     }
 
     bool send_all(const char* data, size_t n) {
@@ -256,6 +261,7 @@ private:
     std::string url_, host_, host_port_, path_ = "/", pending_;
     std::string session_id_;
     std::string last_headers_;
+    std::vector<std::pair<std::string, std::string>> extra_headers_;
     uint16_t port_ = 80;
     SOCKET_T sock_ = kInvalid;
     bool sent_ = false;
