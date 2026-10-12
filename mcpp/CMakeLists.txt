@@ -43,7 +43,7 @@ if(MCPP_BUILD_TESTS)
     find_package(Threads REQUIRED)
 
     set(MCPP_TEST_TARGETS test_json test_protocol test_process test_http
-                          test_features test_http_hardening)
+                          test_features test_http_hardening test_http_threaded)
     foreach(t IN ITEMS ${MCPP_TEST_TARGETS})
         add_executable(${t} tests/${t}.cpp)
         target_link_libraries(${t} PRIVATE mcpp Threads::Threads)
@@ -54,8 +54,8 @@ if(MCPP_BUILD_TESTS)
         add_test(NAME ${t} COMMAND ${t})
     endforeach()
     # socket/thread tests: never let a platform quirk hang CI forever
-    set_tests_properties(test_http test_features test_http_hardening PROPERTIES
-                         TIMEOUT 120)
+    set_tests_properties(test_http test_features test_http_hardening
+                         test_http_threaded PROPERTIES TIMEOUT 120)
 
     # full child-process session against the bundled server
     if(TARGET echo_server)

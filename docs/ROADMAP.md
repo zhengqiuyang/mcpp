@@ -59,6 +59,17 @@
 - [x] code-intel:纯符号名(operator=/析构无签名噪声)、文件内容缓存、
       references 工具(全词匹配,def/use 标注)、预计算小写搜索
 
+## v0.3 并发与自动化冲刺(2026-10-12 ✅)
+
+- [x] ThreadedHttpTransport:每连接一线程 + 请求队列,server 核心保持同步模型;
+      恶意/停滞客户端不再阻塞他人(测试验证)
+- [x] SSE GET 流(text/event-stream + keepalive):服务端主动通知
+      (notifications/progress)实时推送至会话的 SSE 流——修复了 v0.2 中
+      进度通知在 HTTP 模式下会破坏帧协议的隐患(Transport 新增
+      write_notification,stdio 行为不变)
+- [x] code-intel:并行索引(≤8 线程,26 文件 17ms)+ 查询时自动增量刷新
+- [ ] HTTP 客户端消费 SSE 流;TLS;sampling/elicitation/roots;vcpkg/conan
+
 ## 阶段 3:第 7-10 周 — 差异化与发布(部分进行中)
 
 - [ ] mcpp README 对比表(cpp-mcp / TinyMCP / mcp-cpp / TSAR-MCP)

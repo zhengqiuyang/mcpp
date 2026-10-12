@@ -8,6 +8,12 @@ inline void CodeIndex::index(const std::string& root, IndexStats* stats) {
     IndexStats st;
     root_ = root;
 
+    struct Job {
+        fs::path abs;
+        std::string rel;
+        fs::file_time_type mtime;
+    };
+    std::vector<Job> jobs;
     std::unordered_set<std::string> seen;
     std::error_code ec;
     fs::path base = fs::absolute(fs::path(root), ec);
@@ -30,12 +36,44 @@ inline void CodeIndex::index(const std::string& root, IndexStats* stats) {
         if (ec) continue;
         auto old = files_.find(rel);
         if (old != files_.end() && old->second.mtime == mtime) continue;  // unchanged
-
-        FileEntry entry = scan_file(p, rel);
-        entry.mtime = mtime;
-        files_[rel] = std::move(entry);
-        ++st.rescanned;
+        jobs.push_back(Job{p, rel, mtime});
     }
+
+    // Scan fresh/changed files. scan_file touches only locals and the
+    // tree-sitter API, so distinct files scan safely in parallel.
+    if (jobs.size() >= 3) {
+        unsigned hw = std::thread::hardware_concurrency();
+        size_t n = std::min<size_t>(std::max<unsigned>(hw ? hw - 1 : 1, 1), 8);
+        n = std::min(n, jobs.size());
+        std::mutex mux;
+        size_t next = 0;
+        std::vector<std::pair<std::string, FileEntry>> done;
+        std::vector<std::thread> pool;
+        for (size_t t = 0; t < n; ++t)
+            pool.emplace_back([&] {
+                for (;;) {
+                    size_t i;
+                    {
+                        std::lock_guard<std::mutex> lk(mux);
+                        if (next >= jobs.size()) return;
+                        i = next++;
+                    }
+                    FileEntry e = scan_file(jobs[i].abs, jobs[i].rel);
+                    e.mtime = jobs[i].mtime;
+                    std::lock_guard<std::mutex> lk(mux);
+                    done.emplace_back(jobs[i].rel, std::move(e));
+                }
+            });
+        for (auto& t : pool) t.join();
+        for (auto& [rel, entry] : done) files_[rel] = std::move(entry);
+    } else {
+        for (const auto& j : jobs) {
+            FileEntry e = scan_file(j.abs, j.rel);
+            e.mtime = j.mtime;
+            files_[j.rel] = std::move(e);
+        }
+    }
+    st.rescanned = jobs.size();
 
     // drop deleted files
     for (auto it = files_.begin(); it != files_.end();) {
@@ -56,6 +94,45 @@ inline void CodeIndex::index(const std::string& root, IndexStats* stats) {
     st.symbols = symbols_.size();
     st.engine = ts_engine_available() ? "tree-sitter(+lexical)" : "lexical";
     if (stats) *stats = st;
+}
+
+// Stat-walk the tree; if anything changed (or vanished) since the last
+// index, run an incremental re-index so queries never serve stale data.
+inline void CodeIndex::maybe_refresh() {
+    if (!auto_refresh_ || refreshing_ || root_.empty()) return;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path base = fs::absolute(fs::path(root_), ec);
+    size_t live = 0;
+    bool changed = false;
+    for (fs::recursive_directory_iterator it(base, fs::directory_options::skip_permission_denied, ec), end;
+         it != end; it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_regular_file(ec)) continue;
+        fs::path p = it->path();
+        if (is_skipped_dir(p)) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        if (!is_source(p)) continue;
+        std::string rel = fs::relative(p, base, ec).generic_string();
+        if (ec) continue;
+        ++live;
+        auto old = files_.find(rel);
+        auto mt = fs::last_write_time(p, ec);
+        if (ec) continue;
+        if (old == files_.end() || old->second.mtime != mt) {
+            changed = true;
+            break;
+        }
+    }
+    if (!changed && files_.size() != live) changed = true;  // deletions
+    if (changed) {
+        refreshing_ = true;
+        IndexStats ignored;
+        index(root_, &ignored);
+        refreshing_ = false;
+    }
 }
 
 inline CodeIndex::FileEntry CodeIndex::scan_file(const std::filesystem::path& abs,
@@ -94,7 +171,8 @@ inline CodeIndex::FileEntry CodeIndex::scan_file(const std::filesystem::path& ab
 
 inline std::vector<Symbol> CodeIndex::search(const std::string& query,
                                              const std::string& kind_filter,
-                                             size_t limit) const {
+                                             size_t limit) {
+    maybe_refresh();
     std::string needle = to_lower(query);
     std::vector<Symbol> hits;
     for (const auto& s : symbols_) {
@@ -107,14 +185,16 @@ inline std::vector<Symbol> CodeIndex::search(const std::string& query,
     return hits;
 }
 
-inline std::vector<Symbol> CodeIndex::symbols_in_file(const std::string& rel) const {
+inline std::vector<Symbol> CodeIndex::symbols_in_file(const std::string& rel) {
+    maybe_refresh();
     auto it = files_.find(rel);
     return it == files_.end() ? std::vector<Symbol>{} : it->second.symbols;
 }
 
 inline std::vector<std::string> CodeIndex::grep(const std::string& needle,
                                                 bool case_sensitive,
-                                                size_t limit) const {
+                                                size_t limit) {
+    maybe_refresh();
     namespace fs = std::filesystem;
     std::vector<std::string> hits;
     std::string cmp_needle = case_sensitive ? needle : to_lower(needle);
@@ -160,7 +240,8 @@ inline std::vector<std::string> CodeIndex::grep(const std::string& needle,
 }
 
 inline std::vector<Reference> CodeIndex::references(const std::string& symbol,
-                                                    size_t limit) const {
+                                                    size_t limit) {
+    maybe_refresh();
     std::vector<Reference> out;
     if (symbol.empty()) return out;
     auto ident = [](char c) {
@@ -209,7 +290,8 @@ inline std::vector<Reference> CodeIndex::references(const std::string& symbol,
 }
 
 inline std::optional<std::string> CodeIndex::read_file(const std::string& rel, int64_t start,
-                                                       int64_t end) const {
+                                                       int64_t end) {
+    maybe_refresh();
     namespace fs = std::filesystem;
     if (!is_within(rel)) return std::nullopt;
     std::ifstream in(fs::path(root_) / rel, std::ios::binary);

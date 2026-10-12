@@ -50,7 +50,8 @@ Design principles:
 | `include/mcpp/protocol.hpp` | Wire types, content blocks, JSON-RPC message helpers |
 | `include/mcpp/transport.hpp` | `Transport` interface + stdio + in-memory pair |
 | `include/mcpp/process_transport.hpp` | Spawn any MCP server binary, talk over its stdio |
-| `include/mcpp/http_transport.hpp` | Streamable HTTP server transport (POST-only, stateless) |
+| `include/mcpp/http_transport.hpp` | Streamable HTTP server transport (single-threaded accept loop) |
+| `include/mcpp/threaded_http_transport.hpp` | Concurrent HTTP: thread-per-connection, SSE GET streams, notifications |
 | `include/mcpp/http_client_transport.hpp` | Streamable HTTP client (one connection per message) |
 | `include/mcpp/server.hpp` | `McpServer`: registration API + dispatch loop |
 | `include/mcpp/client.hpp` | `McpClient`: initialize / list_tools / call_tool |
@@ -117,6 +118,7 @@ auto r = client.call_tool("add", mcpp::Json{{"a", 19}, {"b", 23}});
 | `notifications/progress` (bound to `_meta.progressToken`) | ✅ via `ToolContext::report_progress` |
 | Request cancellation | ✅ cooperative checkpoints (`ToolContext::cancel_checkpoint` → -32800) |
 | Streamable HTTP sessions (Mcp-Session-Id + DELETE) | ✅ plus TTL expiry, session cap, Origin guard (DNS-rebinding) |
+| Concurrent HTTP + **SSE GET stream** | ✅ `ThreadedHttpTransport`: thread-per-connection, server-initiated notifications (`notifications/progress`) delivered via SSE; stalled clients cannot block others |
 | Server-side argument validation (JSON-Schema subset) | ✅ default on → -32602 before handlers run |
 | Fuzzing (JSON parser + RPC dispatch) | ✅ deterministic fuzzers in CI + sanitizer job |
 | Server-not-initialized gating (-32002) | ✅ |
@@ -155,14 +157,14 @@ See `tests/mcp-test.yaml`.
 
 ## Roadmap
 
-1. **v0.1** — stdio core, ProcessTransport, full tests, examples, CI matrix
-   (gcc/clang/msvc × linux/macos/windows); validated against the official
-   MCP Inspector CLI.
-2. **v0.2 (current)** — Streamable HTTP sessions (`Mcp-Session-Id` + DELETE),
-   list pagination, progress notifications + cancellation checkpoints,
-   CMake `install(EXPORT)` / `find_package(mcpp)` support.
-3. **v0.3** — SSE GET stream, thread-per-connection HTTP, HTTP client TLS,
-   vcpkg + conan recipes.
+1. **v0.1** — stdio core, ProcessTransport, full tests, examples, CI matrix;
+   validated against the official MCP Inspector CLI.
+2. **v0.2** — Streamable HTTP sessions, list pagination, progress +
+   cancellation, argument validation (fuzzing + sanitizer CI), packaging.
+3. **v0.3 (current)** — concurrent HTTP with SSE GET streams and
+   notification delivery (`ThreadedHttpTransport`); code-intel parallel
+   indexing + auto-refresh. Next: HTTP client SSE consumption, TLS,
+   sampling/elicitation, vcpkg/conan recipes.
 
 ## Relation to existing C++ MCP libraries
 

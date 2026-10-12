@@ -33,6 +33,8 @@ static void write(const fs::path& p, const std::string& content) {
     std::ofstream(p, std::ios::binary) << content;
 }
 
+static void run_auto_refresh_checks(CodeIndex& index, const fs::path& dir);
+
 int main() {
     fs::path dir = fs::temp_directory_path() / ("code-intel-test-" + std::to_string(::rand()));
     fs::create_directories(dir / "src");
@@ -154,8 +156,31 @@ int main() {
     CHECK(body->find("class Widget") != std::string::npos);
     CHECK(index.read_file("../outside", 1, 10) == std::nullopt);  // sandboxed
 
+    // ---- auto-refresh: queries notice changes without explicit index() ---
+    run_auto_refresh_checks(index, dir);
+
     fs::remove_all(dir);
     std::printf("test_index: %d checks, %d failures (engine: %s)\n", g_checks, g_failures,
                 code_intel::ts_engine_available() ? "tree-sitter" : "lexical");
     return g_failures == 0 ? 0 : 1;
+}
+
+static void run_auto_refresh_checks(CodeIndex& index, const fs::path& dir) {
+    index.set_auto_refresh(true);
+    write(dir / "src" / "added_later.py", "def fresh_function():\n    pass\n");
+    fs::last_write_time(dir / "src" / "added_later.py",
+                        fs::file_time_type::clock::now() + std::chrono::seconds(2));
+    auto fresh = index.search("fresh_function", "", 10);
+    g_checks += 1;
+    if (fresh.empty()) {
+        g_failures += 1;
+        std::fprintf(stderr, "FAIL auto-refresh did not pick up the new file\n");
+    }
+    fs::remove(dir / "src" / "added_later.py");
+    auto gone = index.search("fresh_function", "", 10);
+    g_checks += 1;
+    if (!gone.empty()) {
+        g_failures += 1;
+        std::fprintf(stderr, "FAIL auto-refresh kept a deleted file\n");
+    }
 }

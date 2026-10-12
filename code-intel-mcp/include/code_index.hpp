@@ -16,9 +16,11 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -69,17 +71,23 @@ class CodeIndex {
 public:
     void index(const std::string& root, IndexStats* stats = nullptr);
 
+    // When enabled (host applications may turn this on), every query first
+    // stats the tree and incrementally re-indexes anything that changed —
+    // clients never need to call `index` twice.
+    void set_auto_refresh(bool on) { auto_refresh_ = on; }
+    bool auto_refresh() const { return auto_refresh_; }
+
     std::vector<Symbol> search(const std::string& query, const std::string& kind_filter,
-                               size_t limit) const;
-    std::vector<Symbol> symbols_in_file(const std::string& rel) const;
+                               size_t limit);
+    std::vector<Symbol> symbols_in_file(const std::string& rel);
     std::vector<std::string> grep(const std::string& needle, bool case_sensitive,
-                                  size_t limit) const;
+                                  size_t limit);
     std::optional<std::string> read_file(const std::string& rel, int64_t start,
-                                         int64_t end) const;
+                                         int64_t end);
     // All case-sensitive word-boundary occurrences of `symbol` across cached
     // file contents, marked as definition when they coincide with a known
     // symbol of the same name.
-    std::vector<Reference> references(const std::string& symbol, size_t limit) const;
+    std::vector<Reference> references(const std::string& symbol, size_t limit);
 
     size_t file_count() const { return files_.size(); }
     size_t symbol_count() const { return symbols_.size(); }
@@ -137,12 +145,15 @@ private:
     }
 
     FileEntry scan_file(const std::filesystem::path& abs, const std::string& rel);
+    void maybe_refresh();
     static std::vector<Symbol> lexical_scan(const std::string& content,
                                             const std::string& rel, const std::string& ext);
 
     std::string root_;
     std::map<std::string, FileEntry> files_;  // rel path -> entry
     std::vector<Symbol> symbols_;             // flattened, sorted for search
+    bool auto_refresh_ = false;
+    bool refreshing_ = false;
 };
 
 }  // namespace code_intel

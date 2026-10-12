@@ -57,7 +57,8 @@ public:
         p["progress"] = progress;
         if (total) p["total"] = *total;
         if (!message.empty()) p["message"] = message;
-        sink_->write_message(msg::notification("notifications/progress", std::move(p)).dump());
+        sink_->write_notification(
+            msg::notification("notifications/progress", std::move(p)).dump());
     }
 
     // Throw REQUEST_CANCELLED if the client cancelled this request.

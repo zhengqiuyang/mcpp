@@ -23,6 +23,10 @@ public:
     // message" (e.g. a JSON-RPC notification): stdio stays silent, HTTP
     // answers 202 Accepted.
     virtual void write_message(const std::string& msg) = 0;
+    // Server-initiated notification (notifications/progress etc.). Defaults
+    // to the reply path, which is correct for stdio; stream-capable
+    // transports override it (HTTP delivers these on the SSE stream).
+    virtual void write_notification(const std::string& msg) { write_message(msg); }
 };
 
 // Newline-delimited JSON over the process stdin/stdout, per the MCP stdio

@@ -33,13 +33,14 @@ std::string format_symbols(const std::vector<code_intel::Symbol>& hits) {
 
 int main() {
     CodeIndex index;
+    index.set_auto_refresh(true);  // queries stat the tree and pick up changes
     IndexStats last_stats;
 
     std::ostringstream about;
     about << "Codebase intelligence (mcpp " << kVersion << ", engine: "
           << (code_intel::ts_engine_available() ? "tree-sitter+lexical" : "lexical")
-          << "). Call `index` once with the repository root before searching. "
-             "Re-indexing is incremental (only changed files are rescanned).";
+          << "). Index once with `index`; every query automatically picks up "
+             "file changes (incremental mtime check). Parallel scanning.";
 
     McpServer server("com.zqy.mcpp.code-intel", "0.2.0", ServerOptions{about.str()});
 
